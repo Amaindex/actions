@@ -36,6 +36,31 @@ jobs:
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
           fi
 
+      - name: Enable debug and KVM features
+        run: |
+          # Enable kernel debugging features
+          sed -i 's/# CONFIG_DEBUG_KERNEL is not set/CONFIG_DEBUG_KERNEL=y/' .config
+          sed -i 's/# CONFIG_DEBUG_INFO is not set/CONFIG_DEBUG_INFO=y/' .config
+          sed -i 's/# CONFIG_GDB_SCRIPTS is not set/CONFIG_GDB_SCRIPTS=y/' .config
+          
+          # Enable KVM and virtualization features
+          sed -i 's/# CONFIG_VIRTUALIZATION is not set/CONFIG_VIRTUALIZATION=y/' .config
+          sed -i 's/# CONFIG_KVM is not set/CONFIG_KVM=y/' .config
+          
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            sed -i 's/# CONFIG_KVM_INTEL is not set/CONFIG_KVM_INTEL=y/' .config
+            sed -i 's/# CONFIG_KVM_AMD is not set/CONFIG_KVM_AMD=y/' .config
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            sed -i 's/# CONFIG_KVM_ARM_HOST is not set/CONFIG_KVM_ARM_HOST=y/' .config
+          fi
+          
+          # Update the configuration
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            make olddefconfig
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          fi
+
       - name: Build kernel
         run: |
           if [ "${{ matrix.arch }}" = "amd64" ]; then
