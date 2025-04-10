@@ -1,4 +1,4 @@
-name: Build Linux Kernel and Upload to Artifacts
+name: Build Kernel
 
 on:
   workflow_dispatch:
