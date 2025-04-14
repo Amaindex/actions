@@ -36,7 +36,7 @@ jobs:
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
           fi
 
-      - name: Enable debug and KVM features
+      - name: Enable debug, KVM, and ftrace features
         run: |
           # Enable kernel debugging features
           sed -i 's/# CONFIG_DEBUG_KERNEL is not set/CONFIG_DEBUG_KERNEL=y/' .config
@@ -46,6 +46,13 @@ jobs:
           # Enable KVM and virtualization features
           sed -i 's/# CONFIG_VIRTUALIZATION is not set/CONFIG_VIRTUALIZATION=y/' .config
           sed -i 's/# CONFIG_KVM is not set/CONFIG_KVM=y/' .config
+          
+          # Enable ftrace features
+          sed -i 's/# CONFIG_FTRACE is not set/CONFIG_FTRACE=y/' .config
+          sed -i 's/# CONFIG_FUNCTION_TRACER is not set/CONFIG_FUNCTION_TRACER=y/' .config
+          sed -i 's/# CONFIG_FUNCTION_GRAPH_TRACER is not set/CONFIG_FUNCTION_GRAPH_TRACER=y/' .config
+          sed -i 's/# CONFIG_DYNAMIC_FTRACE is not set/CONFIG_DYNAMIC_FTRACE=y/' .config
+          sed -i 's/# CONFIG_FTRACE_MCOUNT_RECORD is not set/CONFIG_FTRACE_MCOUNT_RECORD=y/' .config
           
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             sed -i 's/# CONFIG_KVM_INTEL is not set/CONFIG_KVM_INTEL=y/' .config
