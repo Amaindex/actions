@@ -92,8 +92,10 @@ jobs:
           # Define output filename
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             KERNEL_NAME="vmlinuz-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
+            SUFFIX="${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
           else
             KERNEL_NAME="vmlinuz-${VERSION}-${ARCH_SUFFIX}"
+            SUFFIX="${VERSION}-${ARCH_SUFFIX}"
           fi
           
           if [ "${{ matrix.arch }}" = "amd64" ]; then
@@ -101,8 +103,8 @@ jobs:
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             cp arch/arm64/boot/Image kernel-package/${KERNEL_NAME}
           fi
-          cp System.map kernel-package/System.map-${{ matrix.arch }}
-          cp .config kernel-package/config-${{ matrix.arch }}
+          cp System.map kernel-package/System.map-${SUFFIX}
+          cp .config kernel-package/config-${SUFFIX}
           tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
           # Set KERNEL_VERSION as environment variable
           echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
