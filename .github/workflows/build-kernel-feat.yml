@@ -7,6 +7,10 @@ on:
         description: 'Branch to build (e.g., ax)'
         required: true
         default: 'ax'
+      build_number:
+        description: 'Build number (e.g., 147)'
+        required: false
+        default: ''
 
 jobs:
   build-kernel:
@@ -79,18 +83,33 @@ jobs:
       - name: Package kernel
         run: |
           mkdir -p kernel-package
+          # Extract kernel version from Makefile
+          KERNEL_VERSION=$(make kernelversion)
+          # Construct version string (remove any extra suffix if needed)
+          VERSION=$(echo $KERNEL_VERSION | sed 's/-[a-zA-Z0-9]*$//')
+          # Define architecture suffix
+          ARCH_SUFFIX=${{ matrix.arch }}
+          # Define output filename
+          if [ -n "${{ github.event.inputs.build_number }}" ]; then
+            KERNEL_NAME="vmlinuz-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
+          else
+            KERNEL_NAME="vmlinuz-${VERSION}-${ARCH_SUFFIX}"
+          fi
+          
           if [ "${{ matrix.arch }}" = "amd64" ]; then
-            cp arch/x86/boot/bzImage kernel-package/
+            cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            cp arch/arm64/boot/Image kernel-package/
+            cp arch/arm64/boot/Image kernel-package/${KERNEL_NAME}
           fi
           cp System.map kernel-package/System.map-${{ matrix.arch }}
           cp .config kernel-package/config-${{ matrix.arch }}
           tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
+          # Set KERNEL_VERSION as environment variable
+          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-kernel-${{ matrix.arch }}
+          name: linux-kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}
           path: linux-kernel-${{ matrix.arch }}.tar.gz 
           retention-days: 90
