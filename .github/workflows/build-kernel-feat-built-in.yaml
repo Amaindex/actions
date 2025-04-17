@@ -1,0 +1,127 @@
+name: Build Kernel with Built-In Config
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build (e.g., ax)'
+        required: true
+        default: 'ax'
+      build_number:
+        description: 'Build number (e.g., 147)'
+        required: false
+        default: ''
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - name: Checkout linux repository
+        uses: actions/checkout@v4
+        with:
+          repository: amaindex/linux
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
+            gcc-aarch64-linux-gnu
+
+      - name: Configure kernel
+        run: |
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            make defconfig
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          fi
+          # Disable module support to ensure all features are built-in
+          scripts/config --disable MODULES
+          # Convert all =m to =y to ensure everything is built-in
+          sed -i 's/=m/=y/g' .config
+          # Update configuration
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            make olddefconfig
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          fi
+
+      - name: Enable debug, KVM, and ftrace features
+        run: |
+          # Enable kernel debugging features
+          scripts/config --enable DEBUG_KERNEL
+          scripts/config --enable DEBUG_INFO
+          scripts/config --enable GDB_SCRIPTS
+          
+          # Enable KVM and virtualization features
+          scripts/config --enable VIRTUALIZATION
+          scripts/config --enable KVM
+          
+          # Enable ftrace features
+          scripts/config --enable FTRACE
+          scripts/config --enable FUNCTION_TRACER
+          scripts/config --enable FUNCTION_GRAPH_TRACER
+          scripts/config --enable DYNAMIC_FTRACE
+          scripts/config --enable FTRACE_MCOUNT_RECORD
+          
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            scripts/config --enable KVM_INTEL
+            scripts/config --enable KVM_AMD
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            scripts/config --enable KVM_ARM_HOST
+          fi
+          
+          # Update the configuration
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            make olddefconfig
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          fi
+
+      - name: Build kernel
+        run: |
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            make -j$(nproc)
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+          fi
+
+      - name: Package kernel
+        run: |
+          mkdir -p kernel-package
+          # Extract kernel version from Makefile
+          KERNEL_VERSION=$(make kernelversion)
+          # Construct version string (remove any extra suffix if needed)
+          VERSION=$(echo $KERNEL_VERSION | sed 's/-[a-zA-Z0-9]*$//')
+          # Define architecture suffix
+          ARCH_SUFFIX=${{ matrix.arch }}
+          # Define output filename
+          if [ -n "${{ github.event.inputs.build_number }}" ]; then
+            KERNEL_NAME="vmlinuz-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
+            SUFFIX="${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
+          else
+            KERNEL_NAME="vmlinuz-${VERSION}-${ARCH_SUFFIX}"
+            SUFFIX="${VERSION}-${ARCH_SUFFIX}"
+          fi
+          
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            cp arch/arm64/boot/Image kernel-package/${KERNEL_NAME}
+          fi
+          cp System.map kernel-package/System.map-${SUFFIX}
+          cp .config kernel-package/config-${SUFFIX}
+          tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
+          # Set KERNEL_VERSION as environment variable
+          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}
+          path: linux-kernel-${{ matrix.arch }}.tar.gz 
+          retention-days: 90

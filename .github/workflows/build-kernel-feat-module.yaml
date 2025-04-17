@@ -1,4 +1,4 @@
-name: Build Kernel with Config
+name: Build Kernel with Module Config
 
 on:
   workflow_dispatch:
@@ -39,11 +39,9 @@ jobs:
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
           fi
-          # Disable module support to ensure all features are built-in
-          scripts/config --disable MODULES
-          # Convert all =m to =y to ensure everything is built-in
-          sed -i 's/=m/=y/g' .config
-          # Update configuration
+          # 启用模块支持（移除禁用 MODULES 的配置）
+          scripts/config --enable MODULES
+          # 更新配置
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make olddefconfig
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
@@ -52,16 +50,16 @@ jobs:
 
       - name: Enable debug, KVM, and ftrace features
         run: |
-          # Enable kernel debugging features
+          # 启用内核调试功能
           scripts/config --enable DEBUG_KERNEL
           scripts/config --enable DEBUG_INFO
           scripts/config --enable GDB_SCRIPTS
           
-          # Enable KVM and virtualization features
+          # 启用 KVM 和虚拟化功能
           scripts/config --enable VIRTUALIZATION
           scripts/config --enable KVM
           
-          # Enable ftrace features
+          # 启用 ftrace 功能
           scripts/config --enable FTRACE
           scripts/config --enable FUNCTION_TRACER
           scripts/config --enable FUNCTION_GRAPH_TRACER
@@ -75,53 +73,74 @@ jobs:
             scripts/config --enable KVM_ARM_HOST
           fi
           
-          # Update the configuration
+          # 更新配置
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make olddefconfig
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           fi
 
-      - name: Build kernel
+      - name: Build kernel and modules
         run: |
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make -j$(nproc)
+            make modules -j$(nproc)
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules -j$(nproc)
           fi
 
-      - name: Package kernel
+      - name: Package kernel and modules
         run: |
           mkdir -p kernel-package
-          # Extract kernel version from Makefile
+          # 提取内核版本
           KERNEL_VERSION=$(make kernelversion)
-          # Construct version string (remove any extra suffix if needed)
+          # 构造版本字符串（移除多余后缀）
           VERSION=$(echo $KERNEL_VERSION | sed 's/-[a-zA-Z0-9]*$//')
-          # Define architecture suffix
+          # 定义架构后缀
           ARCH_SUFFIX=${{ matrix.arch }}
-          # Define output filename
+          # 定义输出文件名
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             KERNEL_NAME="vmlinuz-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
+            MODULES_NAME="modules-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
             SUFFIX="${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
           else
             KERNEL_NAME="vmlinuz-${VERSION}-${ARCH_SUFFIX}"
+            MODULES_NAME="modules-${VERSION}-${ARCH_SUFFIX}"
             SUFFIX="${VERSION}-${ARCH_SUFFIX}"
           fi
           
+          # 复制内核镜像
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             cp arch/arm64/boot/Image kernel-package/${KERNEL_NAME}
           fi
+          
+          # 复制 System.map 和配置文件
           cp System.map kernel-package/System.map-${SUFFIX}
           cp .config kernel-package/config-${SUFFIX}
+          
+          # 安装模块到临时目录并打包
+          mkdir -p kernel-package/lib/modules
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            make modules_install INSTALL_MOD_PATH=kernel-package
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_install INSTALL_MOD_PATH=kernel-package
+          fi
+          
+          # 重命名模块目录以匹配格式
+          mv kernel-package/lib/modules/${KERNEL_VERSION} kernel-package/lib/modules/${SUFFIX}
+          
+          # 打包内核和模块
           tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
-          # Set KERNEL_VERSION as environment variable
+          
+          # 设置环境变量
           echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}
-          path: linux-kernel-${{ matrix.arch }}.tar.gz 
+          path: linux-kernel-${{ matrix.arch }}.tar.gz
           retention-days: 90
