@@ -1,4 +1,4 @@
-name: Build Kernel with Module Config
+name: Build Kernel with Config
 
 on:
   workflow_dispatch:
@@ -39,9 +39,7 @@ jobs:
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
           fi
-          # 启用模块支持（移除禁用 MODULES 的配置）
           scripts/config --enable MODULES
-          # 更新配置
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make olddefconfig
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
@@ -50,30 +48,22 @@ jobs:
 
       - name: Enable debug, KVM, and ftrace features
         run: |
-          # 启用内核调试功能
           scripts/config --enable DEBUG_KERNEL
           scripts/config --enable DEBUG_INFO
           scripts/config --enable GDB_SCRIPTS
-          
-          # 启用 KVM 和虚拟化功能
           scripts/config --enable VIRTUALIZATION
           scripts/config --enable KVM
-          
-          # 启用 ftrace 功能
           scripts/config --enable FTRACE
           scripts/config --enable FUNCTION_TRACER
           scripts/config --enable FUNCTION_GRAPH_TRACER
           scripts/config --enable DYNAMIC_FTRACE
           scripts/config --enable FTRACE_MCOUNT_RECORD
-          
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             scripts/config --enable KVM_INTEL
             scripts/config --enable KVM_AMD
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             scripts/config --enable KVM_ARM_HOST
           fi
-          
-          # 更新配置
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make olddefconfig
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
@@ -121,16 +111,23 @@ jobs:
           cp System.map kernel-package/System.map-${SUFFIX}
           cp .config kernel-package/config-${SUFFIX}
           
-          # 安装模块到临时目录并打包
-          mkdir -p kernel-package/lib/modules
+          # 安装模块到临时目录
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make modules_install INSTALL_MOD_PATH=kernel-package
           elif [ "${{ matrix.arch }}" = "arm64" ]; then
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_install INSTALL_MOD_PATH=kernel-package
           fi
           
+          # 获取实际的模块目录名
+          FULL_MODULE_VERSION=$(ls kernel-package/lib/modules/)
+          echo "FULL_MODULE_VERSION=$FULL_MODULE_VERSION" >> $GITHUB_ENV
+          
           # 重命名模块目录以匹配格式
-          mv kernel-package/lib/modules/${KERNEL_VERSION} kernel-package/lib/modules/${SUFFIX}
+          mv kernel-package/lib/modules/${FULL_MODULE_VERSION} kernel-package/lib/modules/${SUFFIX}
+          
+          # 删除 build 和 source 符号链接（避免无效路径）
+          rm -f kernel-package/lib/modules/${SUFFIX}/build
+          rm -f kernel-package/lib/modules/${SUFFIX}/source
           
           # 打包内核和模块
           tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
