@@ -41,7 +41,7 @@ jobs:
           scripts/config --enable BLOCK
           scripts/config --enable BLK_DEV
           scripts/config --enable BLK_DEV_INITRD
-          # 块设备驱动（模块化，确保 drivers/block 存在）
+          # 块设备驱动（模块化）
           scripts/config --module BLK_DEV_SD
           scripts/config --module BLK_DEV_LOOP
           scripts/config --module BLK_DEV_SR
@@ -49,7 +49,14 @@ jobs:
           scripts/config --module BLK_DEV_NVME
           scripts/config --module BLK_DEV_MD
           scripts/config --module BLK_DEV_DM
-          # 文件系统（模块化，确保 kernel/fs 存在）
+          # Virtio 驱动（模块化）
+          scripts/config --module VIRTIO
+          scripts/config --module VIRTIO_PCI
+          scripts/config --module VIRTIO_BLK
+          scripts/config --module VIRTIO_SCSI
+          scripts/config --module VIRTIO_NET
+          scripts/config --module VIRTIO_GPU
+          # 文件系统（模块化）
           scripts/config --module EXT4_FS
           scripts/config --module BTRFS_FS
           scripts/config --module XFS_FS
@@ -71,15 +78,11 @@ jobs:
           scripts/config --module DM_CRYPT
           scripts/config --module CRYPTO_CBC
           scripts/config --module CRYPTO_XTS
-          # 虚拟化支持（KVM 内置，virtio 模块化）
+          # 虚拟化支持（KVM 内置）
           scripts/config --enable VIRTUALIZATION
           scripts/config --enable KVM
           scripts/config --enable KVM_INTEL
           scripts/config --enable KVM_AMD
-          scripts/config --module VIRTIO
-          scripts/config --module VIRTIO_PCI
-          scripts/config --module VIRTIO_BLK
-          scripts/config --module VIRTIO_NET
           # 调试特性（内置）
           scripts/config --enable DEBUG_KERNEL
           scripts/config --enable DEBUG_INFO
@@ -89,6 +92,17 @@ jobs:
           scripts/config --enable FUNCTION_GRAPH_TRACER
           scripts/config --enable DYNAMIC_FTRACE
           scripts/config --enable FTRACE_MCOUNT_RECORD
+          # 禁用无关驱动
+          scripts/config --disable DRM_I915
+          scripts/config --disable TIGON3
+          scripts/config --disable E100
+          scripts/config --disable R8169
+          scripts/config --disable CFG80211
+          # initramfs 和设备支持
+          scripts/config --enable BLK_DEV_INITRD
+          scripts/config --enable DEVTMPFS
+          scripts/config --enable DEVTMPFS_MOUNT
+          scripts/config --enable TMPFS
           # 确保配置一致
           make olddefconfig
 
@@ -100,13 +114,9 @@ jobs:
       - name: Package kernel and modules
         run: |
           mkdir -p kernel-package
-          # 提取内核版本
           KERNEL_VERSION=$(make kernelversion)
-          # 构造版本字符串（移除多余后缀）
           VERSION=$(echo $KERNEL_VERSION | sed 's/-[a-zA-Z0-9]*$//')
-          # 定义架构后缀
           ARCH_SUFFIX=${{ matrix.arch }}
-          # 定义输出文件名
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             KERNEL_NAME="vmlinuz-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
             MODULES_NAME="modules-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
@@ -117,28 +127,20 @@ jobs:
             SUFFIX="${VERSION}-${ARCH_SUFFIX}"
           fi
           
-          # 复制内核镜像
           cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
-          
-          # 复制 System.map 和配置文件
           cp System.map kernel-package/System.map-${SUFFIX}
           cp .config kernel-package/config-${SUFFIX}
           
-          # 安装模块到临时目录
           make modules_install INSTALL_MOD_PATH=kernel-package
           
-          # 获取实际的模块目录名
           FULL_MODULE_VERSION=$(ls kernel-package/lib/modules/)
           echo "FULL_MODULE_VERSION=$FULL_MODULE_VERSION" >> $GITHUB_ENV
           
-          # 重命名模块目录以匹配格式
           mv kernel-package/lib/modules/${FULL_MODULE_VERSION} kernel-package/lib/modules/${SUFFIX}
           
-          # 删除 build 和 source 符号链接
           rm -f kernel-package/lib/modules/${SUFFIX}/build
           rm -f kernel-package/lib/modules/${SUFFIX}/source
           
-          # 验证关键模块目录
           if [ -d "kernel-package/lib/modules/${SUFFIX}/kernel/drivers/block" ]; then
             echo "Block device modules found:"
             ls -l kernel-package/lib/modules/${SUFFIX}/kernel/drivers/block
@@ -154,15 +156,13 @@ jobs:
             exit 1
           fi
           
-          # 打包所有文件
           tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
           
-          # 设置环境变量
           echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}
+          name: linux-kernel-${{ matrix.arch }}
           path: linux-kernel-${{ matrix.arch }}.tar.gz
           retention-days: 90
