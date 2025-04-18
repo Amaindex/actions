@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        arch: [amd64]
 
     steps:
       - name: Checkout linux repository
@@ -30,55 +30,72 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
-            gcc-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu dwarves cpio pahole
 
       - name: Configure kernel
         run: |
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            make defconfig
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-          fi
+          make defconfig
+          # 启用模块支持
           scripts/config --enable MODULES
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            make olddefconfig
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          fi
-
-      - name: Enable debug, KVM, and ftrace features
-        run: |
+          # 核心块设备支持（内置）
+          scripts/config --enable BLOCK
+          scripts/config --enable BLK_DEV
+          scripts/config --enable BLK_DEV_INITRD
+          # 块设备驱动（模块化，确保 drivers/block 存在）
+          scripts/config --module BLK_DEV_SD
+          scripts/config --module BLK_DEV_LOOP
+          scripts/config --module BLK_DEV_SR
+          scripts/config --module BLK_DEV_BSG
+          scripts/config --module BLK_DEV_NVME
+          scripts/config --module BLK_DEV_MD
+          scripts/config --module BLK_DEV_DM
+          # 文件系统（模块化，确保 kernel/fs 存在）
+          scripts/config --module EXT4_FS
+          scripts/config --module BTRFS_FS
+          scripts/config --module XFS_FS
+          scripts/config --module FAT_FS
+          scripts/config --module VFAT_FS
+          scripts/config --module NFS_FS
+          scripts/config --module NFSD
+          # SCSI 和存储（模块化）
+          scripts/config --enable SCSI
+          scripts/config --module SCSI_MOD
+          scripts/config --module SCSI_COMMON
+          scripts/config --module SCSI_SAS_LIBSAS
+          scripts/config --module ISCSI_TCP
+          # 分区支持（内置）
+          scripts/config --enable PARTITION_ADVANCED
+          scripts/config --enable EFI_PARTITION
+          scripts/config --enable MSDOS_PARTITION
+          # 加密支持（模块化）
+          scripts/config --module DM_CRYPT
+          scripts/config --module CRYPTO_CBC
+          scripts/config --module CRYPTO_XTS
+          # 虚拟化支持（KVM 内置，virtio 模块化）
+          scripts/config --enable VIRTUALIZATION
+          scripts/config --enable KVM
+          scripts/config --enable KVM_INTEL
+          scripts/config --enable KVM_AMD
+          scripts/config --module VIRTIO
+          scripts/config --module VIRTIO_PCI
+          scripts/config --module VIRTIO_BLK
+          scripts/config --module VIRTIO_NET
+          # 调试特性（内置）
           scripts/config --enable DEBUG_KERNEL
           scripts/config --enable DEBUG_INFO
           scripts/config --enable GDB_SCRIPTS
-          scripts/config --enable VIRTUALIZATION
-          scripts/config --enable KVM
           scripts/config --enable FTRACE
           scripts/config --enable FUNCTION_TRACER
           scripts/config --enable FUNCTION_GRAPH_TRACER
           scripts/config --enable DYNAMIC_FTRACE
           scripts/config --enable FTRACE_MCOUNT_RECORD
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            scripts/config --enable KVM_INTEL
-            scripts/config --enable KVM_AMD
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            scripts/config --enable KVM_ARM_HOST
-          fi
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            make olddefconfig
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          fi
+          # 确保配置一致
+          make olddefconfig
 
       - name: Build kernel and modules
         run: |
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            make -j$(nproc)
-            make modules -j$(nproc)
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules -j$(nproc)
-          fi
+          make -j$(nproc)
+          make modules -j$(nproc)
 
       - name: Package kernel and modules
         run: |
@@ -101,22 +118,14 @@ jobs:
           fi
           
           # 复制内核镜像
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            cp arch/arm64/boot/Image kernel-package/${KERNEL_NAME}
-          fi
+          cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
           
           # 复制 System.map 和配置文件
           cp System.map kernel-package/System.map-${SUFFIX}
           cp .config kernel-package/config-${SUFFIX}
           
           # 安装模块到临时目录
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            make modules_install INSTALL_MOD_PATH=kernel-package
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_install INSTALL_MOD_PATH=kernel-package
-          fi
+          make modules_install INSTALL_MOD_PATH=kernel-package
           
           # 获取实际的模块目录名
           FULL_MODULE_VERSION=$(ls kernel-package/lib/modules/)
@@ -125,11 +134,27 @@ jobs:
           # 重命名模块目录以匹配格式
           mv kernel-package/lib/modules/${FULL_MODULE_VERSION} kernel-package/lib/modules/${SUFFIX}
           
-          # 删除 build 和 source 符号链接（避免无效路径）
+          # 删除 build 和 source 符号链接
           rm -f kernel-package/lib/modules/${SUFFIX}/build
           rm -f kernel-package/lib/modules/${SUFFIX}/source
           
-          # 打包内核和模块
+          # 验证关键模块目录
+          if [ -d "kernel-package/lib/modules/${SUFFIX}/kernel/drivers/block" ]; then
+            echo "Block device modules found:"
+            ls -l kernel-package/lib/modules/${SUFFIX}/kernel/drivers/block
+          else
+            echo "Error: No block device modules in kernel-package/lib/modules/${SUFFIX}/kernel/drivers/block" >&2
+            exit 1
+          fi
+          if [ -d "kernel-package/lib/modules/${SUFFIX}/kernel/fs" ]; then
+            echo "File system modules found:"
+            ls -l kernel-package/lib/modules/${SUFFIX}/kernel/fs
+          else
+            echo "Error: No file system modules in kernel-package/lib/modules/${SUFFIX}/kernel/fs" >&2
+            exit 1
+          fi
+          
+          # 打包所有文件
           tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
           
           # 设置环境变量
