@@ -1,4 +1,4 @@
-name: Build Kernel with QEMU/VirtIO Support
+name: Build Kernel for WS Server
 
 on:
   workflow_dispatch:
@@ -57,7 +57,7 @@ jobs:
 
           echo "--- Enabling Common Server Features (Modules) ---"
           # Drivers loaded from initramfs or later (modules =m)
-          scripts/config --module VIRTIO_NET      # Virtio Network card <-- MUST BE MODULE if not built-in
+          scripts/config --module VIRTIO_NET      # Virtio Network card
           scripts/config --module VIRTIO_BALLOON
           scripts/config --module VIRTIO_CONSOLE
           scripts/config --module VIRTIO_GPU
@@ -116,6 +116,21 @@ jobs:
           scripts/config --module IP_NF_NAT
           scripts/config --module IP_NF_MANGLE
 
+          echo "--- Enabling Tailscale Support (Built-in/Module) ---"
+          # TUN/TAP driver for Tailscale VPN
+          scripts/config --module TUN             # TUN device for virtual network
+          # Netfilter and nf_tables for iptables/ip6tables
+          scripts/config --enable NF_TABLES       # nf_tables framework (built-in for reliability)
+          scripts/config --module NF_NAT          # NAT support
+          scripts/config --module NFT_CHAIN_NAT   # NAT chain support
+          scripts/config --module NF_CONNTRACK    # Connection tracking
+          scripts/config --module NFT_CT          # Connection tracking for nf_tables
+          scripts/config --module NFT_FIB_INET    # FIB lookup for nf_tables
+          scripts/config --module NF_TABLES_IPV4  # IPv4 support for nf_tables
+          scripts/config --module NF_TABLES_IPV6  # IPv6 support for nf_tables
+          scripts/config --module IPTABLES        # iptables compatibility
+          scripts/config --module IP6TABLES       # ip6tables compatibility
+
           echo "--- Enabling Debug and KVM Features (Built-in/Module) ---"
           scripts/config --enable DEBUG_KERNEL
           scripts/config --enable DEBUG_INFO
@@ -166,7 +181,7 @@ jobs:
           make olddefconfig
 
           echo "--- Configuration Complete. Verifying key options ---"
-          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m" .config || true
+          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m|CONFIG_TUN=m|CONFIG_NF_TABLES=y" .config || true
 
       - name: Build Kernel and Modules
         run: |
