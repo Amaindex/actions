@@ -1,4 +1,4 @@
-name: Build Kernel with Built-In Config
+name: Build Kernel with Minimal Features
 
 on:
   workflow_dispatch:
@@ -44,38 +44,6 @@ jobs:
           # Convert all =m to =y to ensure everything is built-in
           sed -i 's/=m/=y/g' .config
           # Update configuration
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            make olddefconfig
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          fi
-
-      - name: Enable debug, KVM, and ftrace features
-        run: |
-          # Enable kernel debugging features
-          scripts/config --enable DEBUG_KERNEL
-          scripts/config --enable DEBUG_INFO
-          scripts/config --enable GDB_SCRIPTS
-          
-          # Enable KVM and virtualization features
-          scripts/config --enable VIRTUALIZATION
-          scripts/config --enable KVM
-          
-          # Enable ftrace features
-          scripts/config --enable FTRACE
-          scripts/config --enable FUNCTION_TRACER
-          scripts/config --enable FUNCTION_GRAPH_TRACER
-          scripts/config --enable DYNAMIC_FTRACE
-          scripts/config --enable FTRACE_MCOUNT_RECORD
-          
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            scripts/config --enable KVM_INTEL
-            scripts/config --enable KVM_AMD
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            scripts/config --enable KVM_ARM_HOST
-          fi
-          
-          # Update the configuration
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             make olddefconfig
           elif [ "${{ matrix.arch }}" = "arm64" ]; then

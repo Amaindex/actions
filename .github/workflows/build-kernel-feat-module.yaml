@@ -1,4 +1,4 @@
-name: Build Kernel for Server (QEMU/VirtIO)
+name: Build Kernel with QEMU/VirtIO Support
 
 on:
   workflow_dispatch:
@@ -86,6 +86,36 @@ jobs:
           scripts/config --module CRYPTO_XTS
           scripts/config --module CRYPTO_AES_X86_64
 
+          echo "--- Enabling Docker Support (Built-in/Module) ---"
+          # Essential for Docker's overlay2 storage driver
+          scripts/config --enable OVERLAY_FS      # OverlayFS support (built-in for reliability)
+          # Namespace support for container isolation
+          scripts/config --enable NAMESPACES
+          scripts/config --enable UTS_NS
+          scripts/config --enable IPC_NS
+          scripts/config --enable USER_NS
+          scripts/config --enable PID_NS
+          scripts/config --enable NET_NS
+          # Cgroup support for resource management
+          scripts/config --enable CGROUPS
+          scripts/config --enable CGROUP_CPUACCT
+          scripts/config --enable CGROUP_DEVICE
+          scripts/config --enable CGROUP_FREEZER
+          scripts/config --enable CGROUP_NET_PRIO
+          scripts/config --enable CGROUP_PERF
+          scripts/config --enable CGROUP_SCHED
+          # Security features
+          scripts/config --enable SECCOMP
+          scripts/config --module SECURITY_APPARMOR  # AppArmor for container security
+          # Networking for Docker containers
+          scripts/config --module VETH            # Virtual Ethernet for container networking
+          scripts/config --module NETFILTER
+          scripts/config --module NETFILTER_XTABLES
+          scripts/config --module IP_NF_IPTABLES  # iptables for Docker networking
+          scripts/config --module IP_NF_FILTER
+          scripts/config --module IP_NF_NAT
+          scripts/config --module IP_NF_MANGLE
+
           echo "--- Enabling Debug and KVM Features (Built-in/Module) ---"
           scripts/config --enable DEBUG_KERNEL
           scripts/config --enable DEBUG_INFO
@@ -136,7 +166,7 @@ jobs:
           make olddefconfig
 
           echo "--- Configuration Complete. Verifying key options ---"
-          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=" .config || true
+          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m" .config || true
 
       - name: Build Kernel and Modules
         run: |
