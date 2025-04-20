@@ -25,7 +25,6 @@ jobs:
         with:
           repository: amaindex/linux
           ref: ${{ github.event.inputs.branch }}
-          # fetch-depth: 0 # Consider enabling if precise Git versioning is needed
 
       - name: Install Build Dependencies
         run: |
@@ -39,64 +38,55 @@ jobs:
           make defconfig
 
           echo "--- Enabling Core Boot Requirements (Built-in) ---"
-          # Essential drivers needed *before* initramfs (compile built-in =y)
           scripts/config --enable MODULES
           scripts/config --enable BLOCK
-          scripts/config --enable BLK_DEV_SD      # SCSI disk (/dev/sda)
-          scripts/config --enable SCSI            # Base SCSI
-          scripts/config --enable VIRTIO_PCI      # VirtIO PCI bus
-          scripts/config --enable VIRTIO_SCSI     # VirtIO SCSI controller
-          scripts/config --enable EXT4_FS         # Root filesystem
-          scripts/config --enable VFAT_FS         # EFI partition filesystem
+          scripts/config --enable BLK_DEV_SD
+          scripts/config --enable SCSI
+          scripts/config --enable VIRTIO_PCI
+          scripts/config --enable VIRTIO_SCSI
+          scripts/config --enable EXT4_FS
+          scripts/config --enable VFAT_FS
           scripts/config --enable PARTITION_ADVANCED
-          scripts/config --enable EFI_PARTITION   # GPT support
-          scripts/config --enable MSDOS_PARTITION # MBR support
-          scripts/config --enable BLK_DEV_INITRD  # Initramfs support
+          scripts/config --enable EFI_PARTITION
+          scripts/config --enable MSDOS_PARTITION
+          scripts/config --enable BLK_DEV_INITRD
           scripts/config --enable DEVTMPFS
           scripts/config --enable DEVTMPFS_MOUNT
 
           echo "--- Enabling Common Server Features (Modules) ---"
-          # Drivers loaded from initramfs or later (modules =m)
-          scripts/config --module VIRTIO_NET      # Virtio Network card
+          scripts/config --module VIRTIO_NET
           scripts/config --module VIRTIO_BALLOON
           scripts/config --module VIRTIO_CONSOLE
           scripts/config --module VIRTIO_GPU
           scripts/config --module VIRTIO_INPUT
           scripts/config --module BLK_DEV_LOOP
-          scripts/config --module BLK_DEV_NVME    # If needed for non-root disks
-          scripts/config --module BLK_DEV_DM      # LVM, crypt
-          scripts/config --module BLK_DEV_MD      # Software RAID
-          # --- Other Filesystems (Modules) ---
+          scripts/config --module BLK_DEV_NVME
+          scripts/config --module BLK_DEV_DM
+          scripts/config --module BLK_DEV_MD
           scripts/config --module BTRFS_FS
           scripts/config --module XFS_FS
           scripts/config --module NFS_FS
           scripts/config --module NFSD
           scripts/config --module ISO9660_FS
-          # --- Networking (Modules) ---
           scripts/config --module BRIDGE
           scripts/config --module VLAN_8021Q
-          # --- Storage Controllers & Protocols (Modules) ---
           scripts/config --module AHCI
           scripts/config --module ATA_PIIX
           scripts/config --module SCSI_SAS_LIBSAS
           scripts/config --module ISCSI_TCP
-          # --- Encryption (Modules) ---
           scripts/config --module DM_CRYPT
           scripts/config --module CRYPTO_CBC
           scripts/config --module CRYPTO_XTS
           scripts/config --module CRYPTO_AES_X86_64
 
           echo "--- Enabling Docker Support (Built-in/Module) ---"
-          # Essential for Docker's overlay2 storage driver
-          scripts/config --enable OVERLAY_FS      # OverlayFS support (built-in for reliability)
-          # Namespace support for container isolation
+          scripts/config --enable OVERLAY_FS
           scripts/config --enable NAMESPACES
           scripts/config --enable UTS_NS
           scripts/config --enable IPC_NS
           scripts/config --enable USER_NS
           scripts/config --enable PID_NS
           scripts/config --enable NET_NS
-          # Cgroup support for resource management
           scripts/config --enable CGROUPS
           scripts/config --enable CGROUP_CPUACCT
           scripts/config --enable CGROUP_DEVICE
@@ -104,32 +94,73 @@ jobs:
           scripts/config --enable CGROUP_NET_PRIO
           scripts/config --enable CGROUP_PERF
           scripts/config --enable CGROUP_SCHED
-          # Security features
+          scripts/config --enable CPUSETS
+          scripts/config --enable MEMCG
+          scripts/config --enable CGROUP_PIDS
+          scripts/config --enable CGROUP_BPF
           scripts/config --enable SECCOMP
-          scripts/config --module SECURITY_APPARMOR  # AppArmor for container security
-          # Networking for Docker containers
-          scripts/config --module VETH            # Virtual Ethernet for container networking
-          scripts/config --module NETFILTER
-          scripts/config --module NETFILTER_XTABLES
-          scripts/config --module IP_NF_IPTABLES  # iptables for Docker networking
-          scripts/config --module IP_NF_FILTER
-          scripts/config --module IP_NF_NAT
-          scripts/config --module IP_NF_MANGLE
+          scripts/config --enable SECCOMP_FILTER
+          scripts/config --module SECURITY_APPARMOR
+          scripts/config --module SECURITY_SELINUX
+          scripts/config --module VETH
+          scripts/config --enable NETFILTER
+          scripts/config --enable NETFILTER_XTABLES
+          scripts/config --enable IP_NF_IPTABLES
+          scripts/config --enable IP_NF_FILTER
+          scripts/config --enable IP_NF_NAT
+          scripts/config --enable IP_NF_MANGLE
+          scripts/config --enable IP_NF_TARGET_MASQUERADE
+          scripts/config --module IP_NF_RAW
+          scripts/config --enable BR_NETFILTER
+          scripts/config --module NETFILTER_XT_MATCH_ADDRTYPE
+          scripts/config --module NETFILTER_XT_MATCH_CONNTRACK
+          scripts/config --module NETFILTER_XT_MATCH_IPVS
+          scripts/config --module NETFILTER_XT_MARK
+          scripts/config --module IP6_NF_FILTER
+          scripts/config --module IP6_NF_MANGLE
+          scripts/config --module IP6_NF_NAT
+          scripts/config --module IP6_NF_RAW
+          scripts/config --module IP6_NF_TARGET_MASQUERADE
+          scripts/config --enable EXT4_FS_POSIX_ACL
+          scripts/config --enable EXT4_FS_SECURITY
+          scripts/config --enable KEYS
+          scripts/config --enable POSIX_MQUEUE
+          scripts/config --module IP_VS
+          scripts/config --module IP_VS_NFCT
+          scripts/config --module IP_VS_PROTO_TCP
+          scripts/config --module IP_VS_PROTO_UDP
+          scripts/config --module IP_VS_RR
+          scripts/config --module IP_NF_TARGET_REDIRECT
 
           echo "--- Enabling Tailscale Support (Built-in/Module) ---"
-          # TUN/TAP driver for Tailscale VPN
-          scripts/config --module TUN             # TUN device for virtual network
-          # Netfilter and nf_tables for iptables/ip6tables
-          scripts/config --enable NF_TABLES       # nf_tables framework (built-in for reliability)
-          scripts/config --module NF_NAT          # NAT support
-          scripts/config --module NFT_CHAIN_NAT   # NAT chain support
-          scripts/config --module NF_CONNTRACK    # Connection tracking
-          scripts/config --module NFT_CT          # Connection tracking for nf_tables
-          scripts/config --module NFT_FIB_INET    # FIB lookup for nf_tables
-          scripts/config --module NF_TABLES_IPV4  # IPv4 support for nf_tables
-          scripts/config --module NF_TABLES_IPV6  # IPv6 support for nf_tables
-          scripts/config --module IPTABLES        # iptables compatibility
-          scripts/config --module IP6TABLES       # ip6tables compatibility
+          scripts/config --module TUN
+          scripts/config --enable NF_TABLES
+          scripts/config --enable NF_NAT
+          scripts/config --enable NFT_CHAIN_NAT
+          scripts/config --enable NF_CONNTRACK
+          scripts/config --enable NFT_CT
+          scripts/config --enable NFT_FIB_INET
+          scripts/config --enable NF_TABLES_IPV4
+          scripts/config --enable NF_TABLES_IPV6
+          scripts/config --enable NF_NAT_IPV4
+          scripts/config --enable NF_NAT_IPV6
+          scripts/config --enable NF_CONNTRACK_IPV4
+          scripts/config --enable NF_CONNTRACK_IPV6
+          scripts/config --enable IPTABLES
+          scripts/config --enable IP6TABLES
+          scripts/config --module VXLAN
+          scripts/config --enable BRIDGE_VLAN_FILTERING
+          scripts/config --module IPVLAN
+          scripts/config --module MACVLAN
+          scripts/config --module DUMMY
+          scripts/config --module NF_NAT_FTP
+          scripts/config --module NF_CONNTRACK_FTP
+          scripts/config --module NF_NAT_TFTP
+          scripts/config --module NF_CONNTRACK_TFTP
+
+          echo "--- Enabling WSL2-specific Features ---"
+          scripts/config --enable VIRTIO_MMIO
+          scripts/config --enable VIRTIO_VSOCK
 
           echo "--- Enabling Debug and KVM Features (Built-in/Module) ---"
           scripts/config --enable DEBUG_KERNEL
@@ -141,8 +172,8 @@ jobs:
           scripts/config --enable FUNCTION_GRAPH_TRACER
           scripts/config --enable VIRTUALIZATION
           scripts/config --enable KVM
-          scripts/config --enable KVM_INTEL # Built-in usually better for host
-          scripts/config --enable KVM_AMD   # Built-in usually better for host
+          scripts/config --enable KVM_INTEL
+          scripts/config --enable KVM_AMD
 
           echo "--- Disabling Unnecessary Drivers ---"
           scripts/config --disable DRM_AMDGPU
@@ -155,33 +186,28 @@ jobs:
           scripts/config --disable MAC80211
           scripts/config --disable TIGON3
           scripts/config --disable E100
-          scripts/config --disable E1000E # Disable if sure only VirtIO NIC used
+          scripts/config --disable E1000E
           scripts/config --disable R8169
-          scripts/config --disable USB_COMMON # Be careful if console/debug needs USB
+          scripts/config --disable USB_COMMON
           scripts/config --disable USB_UHCI_HCD
 
           echo "--- Applying Initial Configuration ---"
           make olddefconfig
 
           echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
-          # Construct local version string (e.g., -147-amd64 or -amd64)
           LOCAL_VERSION_SUFFIX=""
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             LOCAL_VERSION_SUFFIX="-${{ github.event.inputs.build_number }}"
           fi
-          # Append arch consistently. Use matrix.arch
-          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-${{ matrix.arch }}" # Result: -147-amd64 or -amd64
-
+          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-${{ matrix.arch }}"
           echo "Setting CONFIG_LOCALVERSION=${LOCAL_VERSION_SUFFIX}"
-          # Use --set-str to ensure it's treated as a string
           scripts/config --set-str CONFIG_LOCALVERSION "${LOCAL_VERSION_SUFFIX}"
 
           echo "--- Finalizing Configuration with Local Version ---"
-          # Run olddefconfig again to apply CONFIG_LOCALVERSION and resolve any new dependencies
           make olddefconfig
 
           echo "--- Configuration Complete. Verifying key options ---"
-          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m|CONFIG_TUN=m|CONFIG_NF_TABLES=y" .config || true
+          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m|CONFIG_TUN=m|CONFIG_NF_TABLES=y|CONFIG_BR_NETFILTER=y|CONFIG_MEMCG=y|CONFIG_NF_NAT=y|CONFIG_IP_NF_IPTABLES=y|CONFIG_CPUSETS=y|CONFIG_CGROUP_PIDS=y|CONFIG_SECCOMP_FILTER=y|CONFIG_EXT4_FS_POSIX_ACL=y|CONFIG_KEYS=y|CONFIG_POSIX_MQUEUE=y|CONFIG_IP_NF_TARGET_MASQUERADE=y|CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m" .config || true
 
       - name: Build Kernel and Modules
         run: |
@@ -191,14 +217,12 @@ jobs:
       - name: Prepare Kernel Package for Manual Install
         run: |
           echo "--- Determining Full Kernel Version ---"
-          # Use 'make kernelrelease' to get the final version string including LOCALVERSION
           KERNEL_SUFFIX=$(make -s kernelrelease)
           echo "Full Kernel Version Suffix: ${KERNEL_SUFFIX}"
-          # Set environment variable for subsequent steps (like artifact naming)
           echo "KERNEL_SUFFIX=${KERNEL_SUFFIX}" >> $GITHUB_ENV
 
           mkdir -p kernel_package/boot
-          mkdir -p kernel_package/lib/modules # modules_install will create the versioned subdir
+          mkdir -p kernel_package/lib/modules
 
           echo "--- Copying Kernel Files ---"
           cp arch/x86/boot/bzImage kernel_package/boot/vmlinuz-${KERNEL_SUFFIX}
@@ -206,20 +230,23 @@ jobs:
           cp .config kernel_package/boot/config-${KERNEL_SUFFIX}
 
           echo "--- Installing Modules ---"
-          # INSTALL_MOD_PATH is the *prefix* where /lib/modules/<KERNEL_SUFFIX> will be created
           make modules_install INSTALL_MOD_PATH=kernel_package/
 
           echo "--- Verifying Module Directory ---"
-          # Check if the expected directory exists
           if [ ! -d "kernel_package/lib/modules/${KERNEL_SUFFIX}" ]; then
             echo "ERROR: Module directory kernel_package/lib/modules/${KERNEL_SUFFIX} was not created!"
             echo "Contents of kernel_package/lib/modules/:"
             ls -l kernel_package/lib/modules/
             exit 1
           fi
-          # No need to rename anymore! 'make modules_install' uses KERNEL_SUFFIX automatically.
+          echo "--- Verifying Docker-related Modules ---"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "br_netfilter.ko" || echo "WARNING: br_netfilter.ko not found!"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "nf_tables.ko" || echo "WARNING: nf_tables.ko not found!"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "ip_tables.ko" || echo "WARNING: ip_tables.ko not found!"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "veth.ko" || echo "WARNING: veth.ko not found!"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "xt_conntrack.ko" || echo "WARNING: xt_conntrack.ko not found!"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "xt_addrtype.ko" || echo "WARNING: xt_addrtype.ko not found!"
 
-          # Optional: Remove build/source symlinks if they exist and aren't needed
           rm -f kernel_package/lib/modules/${KERNEL_SUFFIX}/build
           rm -f kernel_package/lib/modules/${KERNEL_SUFFIX}/source
 
@@ -232,7 +259,6 @@ jobs:
       - name: Upload Kernel Package Artifact
         uses: actions/upload-artifact@v4
         with:
-          # Use the full kernel version determined by 'make kernelrelease'
           name: linux-kernel-package-${{ env.KERNEL_SUFFIX }}
           path: linux-kernel-package-${{ env.KERNEL_SUFFIX }}.tar.gz
           retention-days: 90
