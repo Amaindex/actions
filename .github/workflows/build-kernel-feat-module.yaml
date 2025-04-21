@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Use Docker Kconfig Logic)
+name: Build Kernel for PVE/QEMU VM (Rebuild Docker Config from Kconfig)
 
 on:
   workflow_dispatch:
@@ -38,18 +38,18 @@ jobs:
         run: |
           echo "--- Creating Configuration Fragments ---"
 
-          # --- Base Server Fragment ---
-          # (保持不变 - networking core, block, virtio etc. are covered below too, but keep base minimal)
+          # --- Base Server Fragment (Minimal) ---
+          # Keep only absolute bare minimum for booting and virtio block/rng
           cat <<EOF > base_server.config
-          # Core Boot Requirements
           CONFIG_MODULES=y
-          CONFIG_BLK_DEV_SD=y             # Basic SCSI disk
+          CONFIG_BLOCK=y                  # Needed for any block device
+          CONFIG_BLK_DEV_SD=y             # Basic SCSI disk (might be needed by virtio-scsi if used)
           CONFIG_SCSI=y
           CONFIG_VIRTIO_PCI=y             # Virtio PCI device support
           CONFIG_VIRTIO_BLK=y             # Virtio Block device
-          CONFIG_EXT4_FS=y                # Base EXT4 support
+          CONFIG_EXT4_FS=y                # Root filesystem likely EXT4
           CONFIG_VFAT_FS=y                # EFI partition / boot
-          CONFIG_NLS=y
+          CONFIG_NLS=y                    # For VFAT
           CONFIG_PARTITION_ADVANCED=y
           CONFIG_EFI_PARTITION=y
           CONFIG_MSDOS_PARTITION=y
@@ -57,44 +57,42 @@ jobs:
           CONFIG_DEVTMPFS=y
           CONFIG_DEVTMPFS_MOUNT=y
           CONFIG_HW_RANDOM_VIRTIO=y       # Virtio RNG
-          CONFIG_TMPFS=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS=y                  # Basic tmpfs support
+          # Networking core (NET, INET, IPV6) will be enabled by docker fragment
           EOF
 
-          # --- Docker Essentials Fragment (Based on provided Kconfig selects) ---
-          # This aims to replicate the effect of selecting CONFIG_DOCKER=y and its default sub-options
-          cat <<EOF > docker_essentials.config
-          # Options selected by CONFIG_DOCKER itself
+          # --- Docker Config Fragment (Strictly based on Kconfig selects) ---
+          cat <<EOF > docker_from_kconfig.config
+          # --- From "config DOCKER" selects ---
           CONFIG_PROC_PID_CPUSET=y
           CONFIG_NET=y
           CONFIG_NETDEVICES=y
           CONFIG_NET_CORE=y
           CONFIG_INET=y
           CONFIG_IPV6=y
-          CONFIG_NET_L3_MASTER_DEV=y      # For master device features (bonding, bridge, vlan)
+          CONFIG_NET_L3_MASTER_DEV=y
           CONFIG_NETFILTER=y
           CONFIG_NETFILTER_ADVANCED=y
           CONFIG_NF_CONNTRACK=y
           CONFIG_NETFILTER_XTABLES=y
-          # CONFIG_NF_CONNMARK_IPV4=y # Often selected automatically by others
-          CONFIG_IP_NF_IPTABLES=y         # Enable legacy iptables support
-          CONFIG_NF_NAT_MASQUERADE_IPV4=y # Potentially superseded by IP_NF_TARGET_MASQUERADE? Let's include both for safety based on Kconfig.
-          CONFIG_IP_NF_NAT=y              # Enable legacy iptables NAT
-          # CONFIG_IP_NF_TARGET_NETMAP=y # Marked as TODO: required? in Kconfig, skip for now unless needed
-          CONFIG_IP_NF_TARGET_REDIRECT=y  # Often needed by Docker proxy
+          # CONFIG_NF_CONNMARK_IPV4=y # Let Kconfig handle this dependency if needed
+          CONFIG_IP_NF_IPTABLES=y         # Explicitly selected
+          CONFIG_NF_NAT_MASQUERADE_IPV4=y # Explicitly selected (might be NF_NAT helper)
+          CONFIG_IP_NF_NAT=y              # Explicitly selected
+          # CONFIG_IP_NF_TARGET_NETMAP=y # Marked TODO, skip
+          CONFIG_IP_NF_TARGET_REDIRECT=y  # Explicitly selected
           CONFIG_NET_SCHED=y
           CONFIG_CGROUP_NET_PRIO=y
           CONFIG_CGROUP_NET_CLASSID=y
-          # CONFIG_MD=y # RAID/MD, needed? Let's assume base_server covers if needed, or enable later
+          # CONFIG_MD=y # Skip unless specifically needed
           CONFIG_TTY=y
-          CONFIG_UNIX98_PTYS=y            # Pseudo-terminals
-          # CONFIG_HUGETLBFS=y # Marked as TODO: overlay? Let's rely on OVERLAY_FS selection below
+          CONFIG_UNIX98_PTYS=y
+          # CONFIG_HUGETLBFS=y # Marked TODO, skip
           CONFIG_PERSISTENT_KEYRINGS=y
           CONFIG_ENCRYPTED_KEYS=y
-          # CONFIG_KEY_DH_OPERATIONS=y # Skip unless needed
+          # CONFIG_KEY_DH_OPERATIONS=y # Skip
 
-          # Options selected via "From ebuild" section in Kconfig (under CONFIG_DOCKER)
+          # --- From "From ebuild" section selects ---
           CONFIG_NAMESPACES=y
           CONFIG_NET_NS=y
           CONFIG_PID_NS=y
@@ -108,67 +106,76 @@ jobs:
           CONFIG_CPUSETS=y
           CONFIG_MEMCG=y
           CONFIG_KEYS=y
-          CONFIG_VETH=m                   # Virtual Ethernet Pair (usually module)
+          CONFIG_VETH=m                   # Module
           CONFIG_BRIDGE=y
           CONFIG_BRIDGE_NETFILTER=y
-          CONFIG_NF_NAT_IPV4=y            # Core NAT support for IPv4 (nftables backend)
-          CONFIG_IP_NF_FILTER=y           # Legacy iptables filter table
-          CONFIG_IP_NF_TARGET_MASQUERADE=y # Legacy iptables MASQUERADE target
-          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y # Match address type
-          CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y # Match conntrack state
-          CONFIG_NF_NAT=y                 # Core NAT framework
-          CONFIG_NF_NAT_NEEDED=y          # Auto-selects NAT helpers when needed
+          CONFIG_NF_NAT_IPV4=y            # Explicitly selected (nftables NAT core)
+          CONFIG_IP_NF_FILTER=y           # Explicitly selected
+          CONFIG_IP_NF_TARGET_MASQUERADE=y # Explicitly selected (legacy target)
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+          CONFIG_NF_NAT=y                 # Explicitly selected (core NAT framework)
+          CONFIG_NF_NAT_NEEDED=y          # Explicitly selected
           CONFIG_POSIX_MQUEUE=y
           CONFIG_USER_NS=y
           CONFIG_SECCOMP=y
           CONFIG_CGROUP_PIDS=y
-          # CONFIG_BLK_DEV_THROTTLING=y # Usually selected by BLK_CGROUP if needed
-          # CONFIG_CFQ_GROUP_IOSCHED=y # CFQ is often replaced by BFQ or none nowadays
+          CONFIG_BLK_DEV_THROTTLING=y     # Explicitly selected
+          # CONFIG_CFQ_GROUP_IOSCHED=y # Skip, CFQ less common
           CONFIG_CGROUP_HUGETLB=y
           CONFIG_NET_CLS_CGROUP=y
-          CONFIG_FAIR_GROUP_SCHED=y       # CFS group scheduling
-          CONFIG_RT_GROUP_SCHED=y         # Realtime group scheduling
-          CONFIG_IP_VS=m                  # IP Virtual Server (module)
-          CONFIG_IP_VS_PROTO_TCP=m
-          CONFIG_IP_VS_PROTO_UDP=m
-          CONFIG_IP_VS_NFCT=m             # IPVS Connection Tracking
-          CONFIG_VXLAN=m                  # Virtual Extensible LAN (module)
-          CONFIG_IPVLAN=m                 # IP VLAN (module)
-          CONFIG_MACVLAN=m                # MAC VLAN (module)
-          CONFIG_DUMMY=m                  # Dummy network interface (module)
-          CONFIG_DEVPTS_MULTIPLE_INSTANCES=y # Support multiple PTY instances
-          CONFIG_MEMCG_KMEM=y             # Account kernel memory to memcg
+          CONFIG_FAIR_GROUP_SCHED=y
+          CONFIG_RT_GROUP_SCHED=y
+          CONFIG_IP_VS=m                  # Module
+          CONFIG_IP_VS_PROTO_TCP=m        # Module
+          CONFIG_IP_VS_PROTO_UDP=m        # Module
+          CONFIG_IP_VS_NFCT=m             # Module
+          CONFIG_VXLAN=m                  # Module
+          CONFIG_IPVLAN=m                 # Module
+          CONFIG_MACVLAN=m                # Module
+          CONFIG_DUMMY=m                  # Module
+          CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
+          CONFIG_MEMCG_KMEM=y
 
-          # Options selected by DOCKER_STATISTICS (default y)
+          # --- From DOCKER_STATISTICS selects (default y) ---
           CONFIG_RESOURCE_COUNTERS=y
-          CONFIG_BLK_CGROUP=y             # Block layer cgroup support
-          CONFIG_IOSCHED_CFQ=y            # CFQ IO scheduler (needed for older cgroup v1 IO control)
+          CONFIG_BLK_CGROUP=y
+          CONFIG_IOSCHED_CFQ=y            # Keep CFQ for now based on Kconfig
           CONFIG_CGROUP_PERF=y
-          CONFIG_CFS_BANDWIDTH=y          # CPU bandwidth control
+          CONFIG_CFS_BANDWIDTH=y
 
-          # Options selected by DOCKER_SECURE_NETWORKS (default y)
-          CONFIG_XFRM_ALGO=y              # IPsec algorithms
-          CONFIG_XFRM_USER=y              # IPsec userspace interface
+          # --- From DOCKER_SECURE_NETWORKS selects (default y) ---
+          CONFIG_XFRM_ALGO=y
+          CONFIG_XFRM_USER=y
 
-          # Options selected by DOCKER_DEVICE_MAPPER (default y)
-          CONFIG_BLK_DEV_DM=y             # Device Mapper base
-          CONFIG_DM_THIN_PROVISIONING=y   # Thin provisioning target
-          CONFIG_EXT4_FS=y                # Ensure EXT4 (likely already set)
+          # --- From DOCKER_DEVICE_MAPPER selects (default y) ---
+          CONFIG_BLK_DEV_DM=y
+          CONFIG_DM_THIN_PROVISIONING=y
+          # CONFIG_EXT4_FS=y # Already in base
           CONFIG_EXT4_FS_POSIX_ACL=y
           CONFIG_EXT4_FS_SECURITY=y
 
-          # Options selected by DOCKER_OVERLAY_FS (default y)
-          CONFIG_OVERLAY_FS=y             # Overlay Filesystem
+          # --- From DOCKER_OVERLAY_FS selects (default y) ---
+          CONFIG_OVERLAY_FS=y
           # CONFIG_EXT4_FS_SECURITY=y # Duplicate
           # CONFIG_EXT4_FS_POSIX_ACL=y # Duplicate
+
+          # --- Explicitly add NF_TABLES compatibility based on recent errors ---
+          # Although not explicitly selected, the error suggests it might be needed by iptables-nft
+          CONFIG_NF_TABLES=y              # Base nf_tables support
+          CONFIG_NF_TABLES_IPV4=y         # Enable nf_tables IPv4 support
+          CONFIG_NF_TABLES_IPV6=y         # Enable nf_tables IPv6 support
+          CONFIG_NF_TABLES_COMPAT=y       # Add compatibility layer support
+          CONFIG_NFT_COMPAT=y             # Select the module/code for compat
+          CONFIG_NFT_REJECT_IPV4=y        # Seems needed for full iptables-nft compat
+          CONFIG_NFT_MASQ_IPV4=y          # Ensure nftables native MASQ is available
           EOF
 
-          # --- Tailscale Support Fragment ---
-          # (保持不变)
+
+          # --- Tailscale Support Fragment (Minimal) ---
           cat <<EOF > tailscale.config
           CONFIG_TUN=m                  # TUN device support
-          # INET, IPV6, Netfilter/NAT/NFtables covered now by docker_essentials
-          # CONFIG_VXLAN=m # Already included in docker_essentials
+          # Most networking covered by docker fragment
           EOF
 
           # --- Debug Fragment ---
@@ -208,10 +215,10 @@ jobs:
           make defconfig
 
           echo "--- Merging Custom Configuration Fragments ---"
-          # Use the new docker_essentials fragment
+          # Use the new docker_from_kconfig fragment
           ./scripts/kconfig/merge_config.sh -m .config \
               base_server.config \
-              docker_essentials.config \
+              docker_from_kconfig.config \
               tailscale.config \
               debug.config \
               disable.config
@@ -219,8 +226,8 @@ jobs:
           # *** 调试步骤 1: 检查 合并后、第一个 olddefconfig 之前 的配置 (更新grep) ***
           echo "--- Config AFTER merge, BEFORE olddefconfig ---"
           echo "Checking critical Docker network options:"
-          # Check key options from the new fragment, including both legacy and nft NAT parts selected
-          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_OVERLAY_FS=|^# CONFIG_OVERLAY_FS |^CONFIG_VETH=|^# CONFIG_VETH |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NF_NAT_IPV4=|^# CONFIG_NF_NAT_IPV4 |^CONFIG_NF_NAT_NEEDED=|^# CONFIG_NF_NAT_NEEDED |^CONFIG_NF_NAT_MASQUERADE_IPV4=|^# CONFIG_NF_NAT_MASQUERADE_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
+          # Monitor key options selected by the Kconfig, including *both* NAT implementations
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_OVERLAY_FS=|^# CONFIG_OVERLAY_FS |^CONFIG_VETH=|^# CONFIG_VETH |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NF_NAT_IPV4=|^# CONFIG_NF_NAT_IPV4 |^CONFIG_NF_NAT_NEEDED=|^# CONFIG_NF_NAT_NEEDED |^CONFIG_NF_NAT_MASQUERADE_IPV4=|^# CONFIG_NF_NAT_MASQUERADE_IPV4 |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NF_TABLES_COMPAT=|^# CONFIG_NF_TABLES_COMPAT ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "---------------------------------------------"
 
           echo "--- Applying Merged Configuration (olddefconfig) ---"
@@ -229,7 +236,7 @@ jobs:
           # *** 调试步骤 2: 检查 第一个 olddefconfig 之后 的配置 (更新grep) ***
           echo "--- Config AFTER first olddefconfig ---"
           echo "Checking critical Docker network options:"
-          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_OVERLAY_FS=|^# CONFIG_OVERLAY_FS |^CONFIG_VETH=|^# CONFIG_VETH |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NF_NAT_IPV4=|^# CONFIG_NF_NAT_IPV4 |^CONFIG_NF_NAT_NEEDED=|^# CONFIG_NF_NAT_NEEDED |^CONFIG_NF_NAT_MASQUERADE_IPV4=|^# CONFIG_NF_NAT_MASQUERADE_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_OVERLAY_FS=|^# CONFIG_OVERLAY_FS |^CONFIG_VETH=|^# CONFIG_VETH |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NF_NAT_IPV4=|^# CONFIG_NF_NAT_IPV4 |^CONFIG_NF_NAT_NEEDED=|^# CONFIG_NF_NAT_NEEDED |^CONFIG_NF_NAT_MASQUERADE_IPV4=|^# CONFIG_NF_NAT_MASQUERADE_IPV4 |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NF_TABLES_COMPAT=|^# CONFIG_NF_TABLES_COMPAT ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "---------------------------------------"
 
           echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
@@ -248,7 +255,7 @@ jobs:
           # *** 调试步骤 3: 检查 最终 olddefconfig 之后 的配置 (更新grep) ***
           echo "--- Config AFTER final olddefconfig ---"
           echo "Checking critical Docker network options:"
-          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_OVERLAY_FS=|^# CONFIG_OVERLAY_FS |^CONFIG_VETH=|^# CONFIG_VETH |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NF_NAT_IPV4=|^# CONFIG_NF_NAT_IPV4 |^CONFIG_NF_NAT_NEEDED=|^# CONFIG_NF_NAT_NEEDED |^CONFIG_NF_NAT_MASQUERADE_IPV4=|^# CONFIG_NF_NAT_MASQUERADE_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_OVERLAY_FS=|^# CONFIG_OVERLAY_FS |^CONFIG_VETH=|^# CONFIG_VETH |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NF_NAT_IPV4=|^# CONFIG_NF_NAT_IPV4 |^CONFIG_NF_NAT_NEEDED=|^# CONFIG_NF_NAT_NEEDED |^CONFIG_NF_NAT_MASQUERADE_IPV4=|^# CONFIG_NF_NAT_MASQUERADE_IPV4 |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NF_TABLES_COMPAT=|^# CONFIG_NF_TABLES_COMPAT ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "-------------------------------------"
 
 
