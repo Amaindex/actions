@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Debug Config Step v2)
+name: Build Kernel for PVE/QEMU VM (Debug Config Step v3 - Fix Docker Netfilter)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,8 @@ jobs:
         run: |
           echo "--- Creating Configuration Fragments ---"
 
-          # --- Base Server Fragment (保持之前的修正) ---
+          # --- Base Server Fragment ---
+          # (保持不变)
           cat <<EOF > base_server.config
           # Core Boot Requirements (Built-in where critical)
           CONFIG_NET=y                    # Core networking infrastructure
@@ -95,7 +96,7 @@ jobs:
           CONFIG_CRYPTO_AES_X86_64=m
           EOF
 
-          # --- Docker Support Fragment (修正IPVS语法, 添加NF_DEFRAG_IPV4) ---
+          # --- Docker Support Fragment (添加 CONFIG_NETFILTER_ADVANCED) ---
           cat <<EOF > docker.config
           # Filesystems & Core Features
           CONFIG_OVERLAY_FS=y
@@ -132,7 +133,8 @@ jobs:
 
           # --- Networking ---
           CONFIG_NETFILTER=y              # Core Netfilter (dependency)
-          CONFIG_NF_DEFRAG_IPV4=y         # *** FIX: Add likely missing dependency for BRIDGE_NETFILTER ***
+          CONFIG_NETFILTER_ADVANCED=y     # *** FIX: Needed for bridge-nf, MASQUERADE, etc. ***
+          CONFIG_NF_DEFRAG_IPV4=y         # Dependency for BRIDGE_NETFILTER & others
           CONFIG_BRIDGE_NETFILTER=y       # The target setting
           CONFIG_BRIDGE_VLAN_FILTERING=y
 
@@ -143,16 +145,16 @@ jobs:
           CONFIG_NETFILTER_XTABLES=y
           CONFIG_IP_NF_IPTABLES=y
           CONFIG_IP_NF_FILTER=y
-          CONFIG_IP_NF_NAT=y
+          CONFIG_IP_NF_NAT=y              # Needed for IP_NF_TARGET_MASQUERADE
           CONFIG_IP_NF_MANGLE=y
           CONFIG_IP_NF_RAW=m
-          CONFIG_IP_NF_TARGET_MASQUERADE=y
+          CONFIG_IP_NF_TARGET_MASQUERADE=y # Docker needs this for default bridge NAT
           CONFIG_IP_NF_TARGET_REDIRECT=m
           CONFIG_IP6_NF_IPTABLES=y
           CONFIG_IP6_NF_FILTER=m
           CONFIG_IP6_NF_MANGLE=m
           CONFIG_IP6_NF_RAW=m
-          CONFIG_IP6_NF_NAT=m
+          CONFIG_IP6_NF_NAT=m             # Needed for IP6_NF_TARGET_MASQUERADE
           CONFIG_IP6_NF_TARGET_MASQUERADE=m
 
           # nf_tables Backend Support
@@ -161,11 +163,11 @@ jobs:
           CONFIG_NF_TABLES_IPV6=y
           CONFIG_NFT_CT=y
           CONFIG_NFT_CHAIN_NAT=y
-          CONFIG_NF_NAT_IPV4=y
-          CONFIG_NF_NAT_IPV6=y
-          CONFIG_NFT_MASQ=y
-          CONFIG_NFT_MASQ_IPV4=y
-          CONFIG_NFT_MASQ_IPV6=y
+          CONFIG_NF_NAT_IPV4=y            # Needed for NFT_MASQ_IPV4
+          CONFIG_NF_NAT_IPV6=y            # Needed for NFT_MASQ_IPV6
+          CONFIG_NFT_MASQ=y               # Base for MASQ targets in nftables
+          CONFIG_NFT_MASQ_IPV4=y          # nftables IPv4 MASQUERADE support
+          CONFIG_NFT_MASQ_IPV6=y          # nftables IPv6 MASQUERADE support
           CONFIG_NFT_FIB_INET=y
 
           # Netfilter Conntrack
@@ -198,6 +200,7 @@ jobs:
           EOF
 
           # --- Tailscale Support Fragment ---
+          # (保持不变)
           cat <<EOF > tailscale.config
           CONFIG_TUN=m                  # TUN device support
           # INET, IPV6, Netfilter/NAT/NFtables covered in base/docker configs
@@ -206,7 +209,8 @@ jobs:
           CONFIG_VXLAN=m
           EOF
 
-          # --- Debug Fragment (Added IKCONFIG) ---
+          # --- Debug Fragment ---
+          # (保持不变)
           cat <<EOF > debug.config
           CONFIG_DEBUG_KERNEL=y
           CONFIG_DEBUG_INFO=y
@@ -223,6 +227,7 @@ jobs:
           EOF
 
           # --- Disable Unnecessary Fragment ---
+          # (保持不变)
           cat <<EOF > disable.config
           # CONFIG_DRM is not set
           # CONFIG_SND is not set
@@ -248,17 +253,19 @@ jobs:
               debug.config \
               disable.config
 
-          # *** 调试步骤 1: 检查 合并后、第一个 olddefconfig 之前 的配置 ***
+          # *** 调试步骤 1: 检查 合并后、第一个 olddefconfig 之前 的配置 (增强grep) ***
           echo "--- Config AFTER merge, BEFORE olddefconfig ---"
-          grep -E 'CONFIG_BRIDGE=y|CONFIG_BRIDGE_NETFILTER=' .config || echo "合并后未找到该值"
+          echo "Checking critical Docker network options:"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "---------------------------------------------"
 
           echo "--- Applying Merged Configuration (olddefconfig) ---"
           make olddefconfig
 
-          # *** 调试步骤 2: 检查 第一个 olddefconfig 之后 的配置 ***
+          # *** 调试步骤 2: 检查 第一个 olddefconfig 之后 的配置 (增强grep) ***
           echo "--- Config AFTER first olddefconfig ---"
-          grep -E 'CONFIG_BRIDGE=y|CONFIG_BRIDGE_NETFILTER=' .config || echo "第一次 olddefconfig 后未找到该值"
+          echo "Checking critical Docker network options:"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "---------------------------------------"
 
           echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
@@ -274,9 +281,10 @@ jobs:
           echo "--- Finalizing Configuration with Local Version (olddefconfig) ---"
           make olddefconfig
 
-          # *** 调试步骤 3: 检查 最终 olddefconfig 之后 的配置 (这就是用来编译的配置) ***
+          # *** 调试步骤 3: 检查 最终 olddefconfig 之后 的配置 (增强grep) ***
           echo "--- Config AFTER final olddefconfig ---"
-          grep -E 'CONFIG_BRIDGE=y|CONFIG_BRIDGE_NETFILTER=' .config || echo "最终 olddefconfig 后未找到该值"
+          echo "Checking critical Docker network options:"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "-------------------------------------"
 
 
