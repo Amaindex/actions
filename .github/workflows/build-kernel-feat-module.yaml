@@ -47,7 +47,7 @@ jobs:
         run: |
           echo "--- Using local base config file ---"
           # The path to the config file is relative to the *original* workspace root
-          LOCAL_CONFIG_PATH="../build-kernel/config-6.1.0-0.deb11.22-amd64"
+          LOCAL_CONFIG_PATH="../build-kernel/6.14.3-arch1"
 
           if [ ! -f "${LOCAL_CONFIG_PATH}" ]; then
              echo "ERROR: Local base config file not found at expected path: ${LOCAL_CONFIG_PATH}"
