@@ -288,7 +288,6 @@ jobs:
           grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "-------------------------------------"
 
-
           echo "--- Configuration Complete ---"
 
       # Build Kernel and Modules step remains the same
