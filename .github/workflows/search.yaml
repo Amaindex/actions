@@ -1,0 +1,60 @@
+name: Search Available Kernels in Action Runner Env
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build (e.g., ax from amaindex/linux)'
+        required: true
+        default: 'ax'
+      # No build number or package name needed for this search action
+
+jobs:
+  search-kernels:
+    runs-on: ubuntu-latest # Using Ubuntu runner, should have access to Debian repos
+    strategy:
+      matrix:
+        arch: [amd64]
+
+    steps:
+      # No need to checkout code for this step
+      # - name: Checkout linux repository
+      #   uses: actions/checkout@v4
+      #   with:
+      #     repository: amaindex/linux
+      #     ref: ${{ github.event.inputs.branch }}
+
+      - name: Install Tools and Search for Kernels
+        run: |
+          echo "--- Installing tools ---"
+          # Update lists first, install only necessary tools
+          sudo apt-get update
+          sudo apt-get install -y apt-utils coreutils # Need coreutils for sorting/filtering if desired
+
+          echo "--- Searching for linux-image packages for amd64 ---"
+          # Run apt search and print the output
+          # We search specifically for packages available for 'bullseye' (Debian 11)
+          # The runner itself is Ubuntu, but its apt can query Debian repos if sources are configured,
+          # or we rely on the default sources available which often include Debian mirrors.
+          # Let's try a broad search first. If too broad, we can refine.
+          apt-cache search linux-image-.*-amd64 | sort
+
+          echo "--- Searching specifically in potential Bullseye sources (if available) ---"
+          # Try explicitly checking for bullseye sources if they exist in runner's config
+          # This might or might not work depending on runner's default apt sources.
+          if grep -q bullseye /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+            apt-cache search --names-only -t bullseye linux-image-.*-amd64 | sort
+          else
+            echo "NOTE: 'bullseye' suite not explicitly found in runner's apt sources. Above search includes all available sources."
+          fi
+
+          echo "--- Searching specifically in potential Bullseye Backports sources (if available) ---"
+           if grep -q bullseye-backports /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+            apt-cache search --names-only -t bullseye-backports linux-image-.*-amd64 | sort
+          else
+            echo "NOTE: 'bullseye-backports' suite not explicitly found in runner's apt sources."
+          fi
+
+          echo "--- Search complete ---"
+          echo "Please examine the output above to find a suitable package name and version string."
+          echo "Look for packages like 'linux-image-X.Y.Z-...' and note the version string next to it."
