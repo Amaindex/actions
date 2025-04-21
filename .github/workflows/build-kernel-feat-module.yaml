@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Debug Config Step v4 - Fix Docker Netfilter NFT)
+name: Build Kernel for PVE/QEMU VM (Debug Config Step v5 - Force NFT NAT)
 
 on:
   workflow_dispatch:
@@ -96,7 +96,7 @@ jobs:
           CONFIG_CRYPTO_AES_X86_64=m
           EOF
 
-          # --- Docker Support Fragment (添加 CONFIG_NFT_REJECT_IPV4) ---
+          # --- Docker Support Fragment (禁用传统 iptables IPv4 NAT, 强化 nftables) ---
           cat <<EOF > docker.config
           # Filesystems & Core Features
           CONFIG_OVERLAY_FS=y
@@ -138,45 +138,47 @@ jobs:
           CONFIG_BRIDGE_NETFILTER=y       # The target setting
           CONFIG_BRIDGE_VLAN_FILTERING=y
 
-          # Core NAT Framework
+          # Core NAT Framework (Base for both backends)
           CONFIG_NF_NAT=y
 
-          # iptables Backend Support (Legacy, but good to have for compatibility checks)
-          CONFIG_NETFILTER_XTABLES=y
-          CONFIG_IP_NF_IPTABLES=y
-          CONFIG_IP_NF_FILTER=y
-          CONFIG_IP_NF_NAT=y              # Needed for IP_NF_TARGET_MASQUERADE
-          CONFIG_IP_NF_MANGLE=y
-          CONFIG_IP_NF_RAW=m
-          CONFIG_IP_NF_TARGET_MASQUERADE=y # Docker needs this for default bridge NAT (even in nft mode sometimes?)
-          CONFIG_IP_NF_TARGET_REDIRECT=m
+          # --- iptables Backend Support ---
+          CONFIG_NETFILTER_XTABLES=y      # Base Xtables support needed for matches/targets modules
+          # *** 禁用传统 IPv4 iptables NAT 以避免与 nftables 冲突 ***
+          # CONFIG_IP_NF_IPTABLES=y
+          # CONFIG_IP_NF_FILTER=y
+          # CONFIG_IP_NF_NAT=y
+          # CONFIG_IP_NF_MANGLE=y
+          # CONFIG_IP_NF_RAW=m
+          # CONFIG_IP_NF_TARGET_MASQUERADE=y
+          # CONFIG_IP_NF_TARGET_REDIRECT=m
+          # 保留 IPv6 iptables (如果需要的话，或者也禁用以保持一致)
           CONFIG_IP6_NF_IPTABLES=y
           CONFIG_IP6_NF_FILTER=m
           CONFIG_IP6_NF_MANGLE=m
           CONFIG_IP6_NF_RAW=m
-          CONFIG_IP6_NF_NAT=m             # Needed for IP6_NF_TARGET_MASQUERADE
+          CONFIG_IP6_NF_NAT=m
           CONFIG_IP6_NF_TARGET_MASQUERADE=m
 
-          # nf_tables Backend Support (Primary backend for iptables-nft)
-          CONFIG_NF_TABLES=y
-          CONFIG_NF_TABLES_IPV4=y
-          CONFIG_NF_TABLES_IPV6=y
-          CONFIG_NFT_CT=y
-          CONFIG_NFT_CHAIN_NAT=y
-          CONFIG_NF_NAT_IPV4=y            # Needed for NFT_MASQ_IPV4
-          CONFIG_NF_NAT_IPV6=y            # Needed for NFT_MASQ_IPV6
-          CONFIG_NFT_REJECT_IPV4=y        # *** FIX: Add potential dependency for NFT_MASQ_IPV4 ***
+          # --- nf_tables Backend Support (主要后端 for iptables-nft) ---
+          CONFIG_NF_TABLES=y              # Enable nf_tables support
+          CONFIG_NF_TABLES_IPV4=y         # Enable nf_tables IPv4 support
+          CONFIG_NF_TABLES_IPV6=y         # Enable nf_tables IPv6 support
+          CONFIG_NFT_CT=y                 # nf_tables conntrack support
+          CONFIG_NFT_CHAIN_NAT=y          # Support NAT chains in nf_tables
+          CONFIG_NF_NAT_IPV4=y            # nf_tables IPv4 NAT support (Needed for NFT_MASQ_IPV4)
+          CONFIG_NF_NAT_IPV6=y            # nf_tables IPv6 NAT support (Needed for NFT_MASQ_IPV6)
+          CONFIG_NFT_REJECT_IPV4=y        # Dependency for NFT_MASQ_IPV4
           CONFIG_NFT_MASQ=y               # Base for MASQ targets in nftables
-          CONFIG_NFT_MASQ_IPV4=y          # nftables IPv4 MASQUERADE support (Likely needed by iptables-nft)
-          CONFIG_NFT_MASQ_IPV6=y          # nftables IPv6 MASQUERADE support
-          CONFIG_NFT_FIB_INET=y
+          CONFIG_NFT_MASQ_IPV4=y          # Ensure nftables IPv4 MASQUERADE is enabled
+          CONFIG_NFT_MASQ_IPV6=y          # Ensure nftables IPv6 MASQUERADE is enabled
+          CONFIG_NFT_FIB_INET=y           # Support FIB lookups in nf_tables (often useful)
 
           # Netfilter Conntrack
           CONFIG_NF_CONNTRACK=y
           CONFIG_NF_CONNTRACK_IPV4=y
           CONFIG_NF_CONNTRACK_IPV6=y
 
-          # Netfilter Matches & Helpers
+          # Netfilter Matches & Helpers (Using XTables base)
           CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=m
           CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m
           CONFIG_NETFILTER_XT_MATCH_IPVS=m
@@ -254,19 +256,19 @@ jobs:
               debug.config \
               disable.config
 
-          # *** 调试步骤 1: 检查 合并后、第一个 olddefconfig 之前 的配置 (更新grep) ***
+          # *** 调试步骤 1: 检查 合并后、第一个 olddefconfig 之前 的配置 (保持上次的grep) ***
           echo "--- Config AFTER merge, BEFORE olddefconfig ---"
           echo "Checking critical Docker network options:"
-          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 |^CONFIG_IP_NF_NAT=|^# CONFIG_IP_NF_NAT ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "---------------------------------------------"
 
           echo "--- Applying Merged Configuration (olddefconfig) ---"
           make olddefconfig
 
-          # *** 调试步骤 2: 检查 第一个 olddefconfig 之后 的配置 (更新grep) ***
+          # *** 调试步骤 2: 检查 第一个 olddefconfig 之后 的配置 (保持上次的grep) ***
           echo "--- Config AFTER first olddefconfig ---"
           echo "Checking critical Docker network options:"
-          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 |^CONFIG_IP_NF_NAT=|^# CONFIG_IP_NF_NAT ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "---------------------------------------"
 
           echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
@@ -282,11 +284,12 @@ jobs:
           echo "--- Finalizing Configuration with Local Version (olddefconfig) ---"
           make olddefconfig
 
-          # *** 调试步骤 3: 检查 最终 olddefconfig 之后 的配置 (更新grep) ***
+          # *** 调试步骤 3: 检查 最终 olddefconfig 之后 的配置 (保持上次的grep) ***
           echo "--- Config AFTER final olddefconfig ---"
           echo "Checking critical Docker network options:"
-          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 ' .config || echo "关键Docker网络配置状态未找到或状态未知"
+          grep -E '^CONFIG_BRIDGE=|^# CONFIG_BRIDGE |^CONFIG_BRIDGE_NETFILTER=|^# CONFIG_BRIDGE_NETFILTER |^CONFIG_NETFILTER_ADVANCED=|^# CONFIG_NETFILTER_ADVANCED |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE |^CONFIG_NFT_MASQ=|^# CONFIG_NFT_MASQ |^CONFIG_NFT_MASQ_IPV4=|^# CONFIG_NFT_MASQ_IPV4 |^CONFIG_NFT_REJECT_IPV4=|^# CONFIG_NFT_REJECT_IPV4 |^CONFIG_IP_NF_NAT=|^# CONFIG_IP_NF_NAT ' .config || echo "关键Docker网络配置状态未找到或状态未知"
           echo "-------------------------------------"
+
 
           echo "--- Configuration Complete ---"
 
