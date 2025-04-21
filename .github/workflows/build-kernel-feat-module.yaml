@@ -1,4 +1,4 @@
-name: Build Kernel for Debian 11 VM (Using Debian 11 Base Config + Check Script)
+name: Build Kernel for Debian 11 VM (Using Official 6.1 Base + Check Script)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
         description: 'Optional build number suffix (e.g., 147)'
         required: false
         default: ''
-      # Removed debian_kernel_pkg_name and debian_suite_or_url_base inputs
+      # No Debian package parameters needed anymore
 
 jobs:
   build-kernel:
@@ -36,7 +36,7 @@ jobs:
                                   git \
                                   wget dpkg bash # Need bash for the check script
 
-      - name: Configure Kernel using Debian 11 Base Config
+      - name: Configure Kernel using Official Debian 6.1 Base Config
         run: |
           echo "--- Creating Minimal Custom Fragments ---"
 
@@ -77,18 +77,29 @@ jobs:
           # CONFIG_BNX2 is not set
           EOF
 
-          # --- Fetch and Extract Official Debian 11 (Bullseye) Kernel Config ---
-          # Use a known, relatively recent kernel package from Bullseye (check packages.debian.org if needed)
-          # Example: linux-image-5.10.0-29-amd64 (version 5.10.209-2)
-          DEB_PKG_NAME="linux-image-5.10.0-29-amd64"
-          DEB_PKG_VERSION="5.10.209-2" # Version corresponding to the package name
+          # --- Fetch and Extract Official Debian 6.1 Kernel Config (Latest from oldstable-security) ---
+          DEB_PKG_NAME="linux-image-6.1.0-0.deb11.32-amd64"
+          DEB_PKG_VERSION="6.1.129-1~deb11u1" # Version corresponding to the package name
           DEB_ARCH="${{ matrix.arch }}"
-          DEB_REPO_URL="http://deb.debian.org/debian" # Bullseye standard repo
-          DEB_FULL_PKG_FILENAME="${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb"
-          DEB_URL="${DEB_REPO_URL}/pool/main/l/linux/${DEB_FULL_PKG_FILENAME}"
+          # Use security repo as primary source for security-updated packages
+          DEB_REPO_URL_PRIMARY="http://security.debian.org/debian-security"
+          DEB_URL_PRIMARY="${DEB_REPO_URL_PRIMARY}/pool/updates/main/l/linux/${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb"
+          # Fallback to main repo just in case
+          DEB_REPO_URL_FALLBACK="http://deb.debian.org/debian"
+          DEB_URL_FALLBACK="${DEB_REPO_URL_FALLBACK}/pool/main/l/linux/${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb"
 
-          echo "Attempting to download Debian 11 kernel package from: ${DEB_URL}"
-          wget -T 30 -O kernel_pkg.deb "${DEB_URL}" || { echo "ERROR: Failed to download Debian package ${DEB_FULL_PKG_FILENAME}. Check if package/version exists."; exit 1; }
+
+          echo "Attempting to download Debian 6.1 kernel package..."
+          echo "Primary URL: ${DEB_URL_PRIMARY}"
+          echo "Fallback URL: ${DEB_URL_FALLBACK}"
+
+          wget -T 30 -O kernel_pkg.deb "${DEB_URL_PRIMARY}" || {
+            echo "WARNING: Failed to download from primary security URL. Trying fallback URL...";
+            wget -T 30 -O kernel_pkg.deb "${DEB_URL_FALLBACK}" || {
+              echo "ERROR: Failed to download Debian package ${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb from both URLs. Check package name/version.";
+              exit 1;
+            }
+          }
 
           echo "Extracting Debian kernel config..."
           mkdir -p ./deb_extract/boot
@@ -100,12 +111,12 @@ jobs:
             ls -lR ./deb_extract # Show extracted content for debugging
             exit 1
           fi
-          echo "Found official Debian 11 config file: ${OFFICIAL_CONFIG_FILE}"
+          echo "Found official Debian 6.1 config file: ${OFFICIAL_CONFIG_FILE}"
           # Copy the official config as our base .config
           cp "${OFFICIAL_CONFIG_FILE}" .config
           rm -rf ./deb_extract kernel_pkg.deb # Clean up
 
-          echo "--- Base .config is now from official Debian 11 package ---"
+          echo "--- Base .config is now from official Debian 6.1 (bullseye-security) package ---"
           ls -l .config
 
           # *** IMPORTANT: DO NOT run make defconfig here ***
@@ -116,10 +127,10 @@ jobs:
               tailscale.config \
               debug.config \
               disable.config
-          # *** DO NOT MERGE any docker_*.config ***
+          # *** DO NOT MERGE any docker_*.config or base_server.config ***
 
           echo "--- Applying Merged Configuration (olddefconfig) ---"
-          # Adapt the Debian 11 config to the specific kernel source version (e.g., 6.x)
+          # Adapt the official 6.1 config to the specific kernel source version (your 6.x)
           make olddefconfig
 
           echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
@@ -127,8 +138,8 @@ jobs:
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             LOCAL_VERSION_SUFFIX="-${{ github.event.inputs.build_number }}"
           fi
-          # Append -deb11-base indicator
-          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-base-${{ matrix.arch }}"
+          # Append -deb11-6.1-base indicator
+          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-6.1-base-${{ matrix.arch }}"
           LOCAL_VERSION_SUFFIX=$(echo "${LOCAL_VERSION_SUFFIX}" | head -c 64)
           echo "Setting CONFIG_LOCALVERSION=${LOCAL_VERSION_SUFFIX}"
           ./scripts/config --set-str LOCALVERSION "${LOCAL_VERSION_SUFFIX}"
