@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Debug Config Step)
+name: Build Kernel for PVE/QEMU VM (Debug Config Step v2)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
         run: |
           echo "--- Creating Configuration Fragments ---"
 
-          # --- Base Server Fragment (Added explicit dependencies) ---
+          # --- Base Server Fragment (保持之前的修正) ---
           cat <<EOF > base_server.config
           # Core Boot Requirements (Built-in where critical)
           CONFIG_NET=y                    # Core networking infrastructure
@@ -95,7 +95,7 @@ jobs:
           CONFIG_CRYPTO_AES_X86_64=m
           EOF
 
-          # --- Docker Support Fragment (Adjusted IPVS dependencies) ---
+          # --- Docker Support Fragment (修正IPVS语法, 添加NF_DEFRAG_IPV4) ---
           cat <<EOF > docker.config
           # Filesystems & Core Features
           CONFIG_OVERLAY_FS=y
@@ -132,6 +132,7 @@ jobs:
 
           # --- Networking ---
           CONFIG_NETFILTER=y              # Core Netfilter (dependency)
+          CONFIG_NF_DEFRAG_IPV4=y         # *** FIX: Add likely missing dependency for BRIDGE_NETFILTER ***
           CONFIG_BRIDGE_NETFILTER=y       # The target setting
           CONFIG_BRIDGE_VLAN_FILTERING=y
 
@@ -188,11 +189,11 @@ jobs:
           CONFIG_MACVLAN=m
           CONFIG_DUMMY=m
 
-          # IPVS (Optional, keep dependencies consistent as modules)
+          # IPVS (Optional, keep dependencies consistent as modules, fixed syntax)
           CONFIG_IP_VS=m
-          CONFIG_IP_VS_NFCT=m             # Set to =m as base IP_VS is =m
-          CONFIG_IP_VS_PROTO_TCP=m        # Set to =m as base IP_VS is =m
-          CONFIG_IP_VS_PROTO_UDP=m        # Set to =m as base IP_VS is =m
+          CONFIG_IP_VS_NFCT=m
+          CONFIG_IP_VS_PROTO_TCP=m
+          CONFIG_IP_VS_PROTO_UDP=m
           CONFIG_IP_VS_RR=m
           EOF
 
