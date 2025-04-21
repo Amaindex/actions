@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Final Attempt - Force NFTables)
+name: Build Kernel for PVE/QEMU VM (Final - Clean defconfig before merge)
 
 on:
   workflow_dispatch:
@@ -61,6 +61,7 @@ jobs:
           EOF
 
           # --- Docker Config Fragment (Force NFTables, Disable Legacy IPv4 NAT) ---
+          # (保持上次的最终版本不变)
           cat <<EOF > docker_config.config
           # Base Requirements (Namespaces, CGroups, etc.) - Copied from previous working base
           CONFIG_OVERLAY_FS=y
@@ -229,6 +230,16 @@ jobs:
 
           echo "--- Starting Base Configuration (defconfig) ---"
           make defconfig
+
+          # *** 新步骤: 清理 defconfig 中不想要的默认值 ***
+          echo "--- Cleaning defconfig defaults before merge ---"
+          sed -i \
+            -e 's/^CONFIG_IP_NF_NAT=m/# CONFIG_IP_NF_NAT is not set (disabled before merge)/' \
+            -e 's/^CONFIG_IP_NF_TARGET_MASQUERADE=m/# CONFIG_IP_NF_TARGET_MASQUERADE is not set (disabled before merge)/' \
+            .config
+          echo "--- Defconfig after cleaning ---"
+          grep -E '^CONFIG_IP_NF_NAT=|^# CONFIG_IP_NF_NAT |^CONFIG_IP_NF_TARGET_MASQUERADE=|^# CONFIG_IP_NF_TARGET_MASQUERADE ' .config || echo "Legacy NAT options not found after cleaning"
+          echo "------------------------------"
 
           echo "--- Merging Custom Configuration Fragments ---"
           ./scripts/kconfig/merge_config.sh -m .config \
