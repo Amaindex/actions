@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Fragment Based - Docker Fixes v2)
+name: Build Kernel for PVE/QEMU VM (Debug Config Step)
 
 on:
   workflow_dispatch:
@@ -41,6 +41,7 @@ jobs:
           # --- Base Server Fragment (Added explicit dependencies) ---
           cat <<EOF > base_server.config
           # Core Boot Requirements (Built-in where critical)
+          CONFIG_NET=y                    # Core networking infrastructure
           CONFIG_MODULES=y
           CONFIG_BLOCK=y
           CONFIG_BLK_DEV_SD=y
@@ -130,8 +131,8 @@ jobs:
           CONFIG_POSIX_MQUEUE=y
 
           # --- Networking ---
-          CONFIG_NETFILTER=y
-          CONFIG_BRIDGE_NETFILTER=y
+          CONFIG_NETFILTER=y              # Core Netfilter (dependency)
+          CONFIG_BRIDGE_NETFILTER=y       # The target setting
           CONFIG_BRIDGE_VLAN_FILTERING=y
 
           # Core NAT Framework
@@ -246,8 +247,18 @@ jobs:
               debug.config \
               disable.config
 
+          # *** 调试步骤 1: 检查 合并后、第一个 olddefconfig 之前 的配置 ***
+          echo "--- Config AFTER merge, BEFORE olddefconfig ---"
+          grep -E 'CONFIG_BRIDGE=y|CONFIG_BRIDGE_NETFILTER=' .config || echo "合并后未找到该值"
+          echo "---------------------------------------------"
+
           echo "--- Applying Merged Configuration (olddefconfig) ---"
           make olddefconfig
+
+          # *** 调试步骤 2: 检查 第一个 olddefconfig 之后 的配置 ***
+          echo "--- Config AFTER first olddefconfig ---"
+          grep -E 'CONFIG_BRIDGE=y|CONFIG_BRIDGE_NETFILTER=' .config || echo "第一次 olddefconfig 后未找到该值"
+          echo "---------------------------------------"
 
           echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
           LOCAL_VERSION_SUFFIX=""
@@ -261,6 +272,12 @@ jobs:
 
           echo "--- Finalizing Configuration with Local Version (olddefconfig) ---"
           make olddefconfig
+
+          # *** 调试步骤 3: 检查 最终 olddefconfig 之后 的配置 (这就是用来编译的配置) ***
+          echo "--- Config AFTER final olddefconfig ---"
+          grep -E 'CONFIG_BRIDGE=y|CONFIG_BRIDGE_NETFILTER=' .config || echo "最终 olddefconfig 后未找到该值"
+          echo "-------------------------------------"
+
 
           echo "--- Configuration Complete ---"
 
