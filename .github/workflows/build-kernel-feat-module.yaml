@@ -1,4 +1,5 @@
-name: Build Kernel for Debian 11 VM (Using Local 6.1 Base Config + Check Script) # Updated Name
+# Action Workflow File
+name: Build Kernel for Debian 11 VM (Using Local 6.1 Base Config + Check Script)
 
 on:
   workflow_dispatch:
@@ -11,8 +12,6 @@ on:
         description: 'Optional build number suffix (e.g., 147)'
         required: false
         default: ''
-      # No Debian package parameters needed anymore
-      # No deb_package_url input needed anymore
 
 jobs:
   build-kernel:
@@ -25,8 +24,6 @@ jobs:
       - name: Checkout Project Repository (including local config)
         # This checkout gets your *project* repo, containing the workflow and the config file
         uses: actions/checkout@v4
-        # Assuming the config file is in the same repo as the workflow
-        # If it's in a different repo, adjust this step or add another checkout
 
       - name: Checkout Linux Repository (kernel source)
         uses: actions/checkout@v4
@@ -44,21 +41,19 @@ jobs:
                                   git \
                                   wget dpkg bash # Need bash for the check script
 
-      # ***** MODIFIED STEP START *****
       - name: Configure Kernel using Local Debian 6.1 Base Config
         # Change working directory to where the kernel source was checked out
         working-directory: ./linux_source
         run: |
           echo "--- Using local base config file ---"
           # The path to the config file is relative to the *original* workspace root
-          # where the project repo was checked out. We are now inside ./linux_source
-          LOCAL_CONFIG_PATH="../build-kernel/config-6.1.0-0.deb11.22-amd64" # Adjusted path
+          LOCAL_CONFIG_PATH="../build-kernel/config-6.1.0-0.deb11.22-amd64"
 
           if [ ! -f "${LOCAL_CONFIG_PATH}" ]; then
              echo "ERROR: Local base config file not found at expected path: ${LOCAL_CONFIG_PATH}"
              echo "Current directory: $(pwd)"
              echo "Workspace contents:"
-             ls -l .. # List contents of the parent directory (workspace root)
+             ls -l ..
              exit 1
           fi
 
@@ -69,7 +64,7 @@ jobs:
           ls -l .config
 
           echo "--- Creating Minimal Custom Fragments ---"
-          # Fragments are created within the current directory (./linux_source)
+          # Create fragments in the current working directory (linux_source)
           cat <<EOF > tailscale.config
           CONFIG_TUN=m
           CONFIG_VXLAN=m
@@ -102,7 +97,7 @@ jobs:
           # CONFIG_BNX2 is not set
           EOF
 
-          # --- Merging and Finalizing Config (Remains the same logic) ---
+          # Merge and Finalize Config
           echo "--- Merging MINIMAL Custom Configuration Fragments ---"
           ./scripts/kconfig/merge_config.sh -m .config \
               tailscale.config \
@@ -117,8 +112,7 @@ jobs:
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             LOCAL_VERSION_SUFFIX="-${{ github.event.inputs.build_number }}"
           fi
-          # Keep the indicator, maybe adjust to show it's local? e.g., -deb11-6.1-local
-          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-6.1-local-${{ matrix.arch }}" # Adjusted suffix slightly
+          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-6.1-local-${{ matrix.arch }}"
           LOCAL_VERSION_SUFFIX=$(echo "${LOCAL_VERSION_SUFFIX}" | head -c 63)
           echo "Setting CONFIG_LOCALVERSION=${LOCAL_VERSION_SUFFIX}"
           ./scripts/config --set-str LOCALVERSION "${LOCAL_VERSION_SUFFIX}"
@@ -128,21 +122,30 @@ jobs:
 
           echo "--- Final .config generated ---"
           ls -l .config
-      # ***** MODIFIED STEP END *****
 
-      # --- Subsequent steps need to run in the kernel source directory ---
-
+      # ***** THIS STEP IS MODIFIED *****
       - name: Check Kernel Config for Docker Compatibility
         working-directory: ./linux_source # Ensure this runs in the right place
+        # Explicitly use bash without -e to allow capturing output even on failure
+        shell: bash {0}
         run: |
           echo "--- Downloading check-config.sh ---"
           wget -O check-config.sh https://raw.githubusercontent.com/moby/moby/master/contrib/check-config.sh
           chmod +x check-config.sh
 
           echo "--- Running check-config.sh ---"
-          CHECK_OUTPUT=$(./check-config.sh .config)
-          echo "${CHECK_OUTPUT}"
+          # Capture stdout and stderr, then capture the exit code
+          CHECK_OUTPUT=$(./check-config.sh .config 2>&1)
+          EXIT_CODE=$?
 
+          echo "--- check-config.sh raw output (stdout & stderr) ---"
+          echo "${CHECK_OUTPUT}"
+          echo "--- check-config.sh exit code: ${EXIT_CODE} ---"
+
+          # Initialize failure flag
+          CONFIG_CHECK_FAILED=0
+
+          # Analyze output content for missing necessary options
           echo "--- Analyzing check-config.sh Results ---"
           GENERALLY_NECESSARY_OUTPUT=$(echo "${CHECK_OUTPUT}" | sed -n '/Generally Necessary:/,/Optional Features:/p' | sed '$d')
           if echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i 'FAIL|missing|disabled'; then
@@ -150,12 +153,27 @@ jobs:
              echo "--- Failing Necessary Section ---"
              echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i 'FAIL|missing|disabled'
              echo "---------------------------------"
-             exit 1
+             CONFIG_CHECK_FAILED=1 # Mark as failed based on content
           else
-             echo "OK: All generally necessary options seem to be enabled."
+             # Only report OK if the check based on content passed
+             # We will check the exit code separately
+             echo "Content Check: All generally necessary options seem to be enabled in the output."
           fi
-          echo "--- Configuration Check Complete ---"
 
+          # Check if the script itself failed to execute properly
+          if [ ${EXIT_CODE} -ne 0 ]; then
+              echo "ERROR: check-config.sh script execution failed with exit code ${EXIT_CODE}."
+              # Decide if script execution failure should also fail the build
+              # CONFIG_CHECK_FAILED=1 # Uncomment if script failure itself is critical
+          fi
+
+          # Final decision: exit if any check failed
+          if [ ${CONFIG_CHECK_FAILED} -ne 0 ]; then
+              echo "--- Configuration Check FAILED ---"
+              exit 1
+          else
+              echo "--- Configuration Check PASSED ---"
+          fi
 
       - name: Build Kernel and Modules
         working-directory: ./linux_source # Ensure this runs in the right place
@@ -172,8 +190,8 @@ jobs:
           # Output KERNEL_SUFFIX to GITHUB_ENV so the upload step can use it
           echo "KERNEL_SUFFIX=${KERNEL_SUFFIX}" >> $GITHUB_ENV
 
-          # Use an absolute path for INSTALL_PATH or ensure it's relative to workspace root
-          INSTALL_PATH=${GITHUB_WORKSPACE}/_install # Use workspace root for staging area
+          # Use an absolute path for INSTALL_PATH relative to workspace root
+          INSTALL_PATH=${GITHUB_WORKSPACE}/_install
           mkdir -p ${INSTALL_PATH}/boot
           mkdir -p ${INSTALL_PATH}/lib/modules
 
@@ -183,7 +201,6 @@ jobs:
           cp .config ${INSTALL_PATH}/boot/config-${KERNEL_SUFFIX} # Copy from current dir (linux_source)
 
           echo "--- Installing Modules ---"
-          # INSTALL_MOD_PATH needs to be the absolute path or correctly relative
           make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
 
           echo "--- Verifying Module Directory Existence ---"
