@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
+        arch: [amd64] # Keep targeting amd64
 
     steps:
       - name: Checkout linux repository
@@ -78,25 +78,38 @@ jobs:
           EOF
 
           # --- Fetch and Extract Official Debian 6.1 Kernel Config (Latest from oldstable-security) ---
-          DEB_PKG_NAME="linux-image-6.1.0-0.deb11.32-amd64"
-          DEB_PKG_VERSION="6.1.129-1~deb11u1" # Version corresponding to the package name
-          DEB_ARCH="${{ matrix.arch }}"
+          # ***** MODIFIED SECTION START *****
+          # Updated based on available packages in bullseye-security as of checking
+          DEB_PKG_NAME="linux-image-6.1.0-0.deb11.25-amd64-unsigned"
+          DEB_PKG_VERSION="6.1.106-3~deb11u3"
+          # ***** MODIFIED SECTION END *****
+          DEB_ARCH="${{ matrix.arch }}" # This remains amd64 based on the matrix
+
           # Use security repo as primary source for security-updated packages
+          # Note: The package name might influence the path component (e.g., /linux/ vs /linux-signed-amd64/)
+          # Assuming the standard 'linux' source package path works for unsigned images too. Adjust if needed.
           DEB_REPO_URL_PRIMARY="http://security.debian.org/debian-security"
           DEB_URL_PRIMARY="${DEB_REPO_URL_PRIMARY}/pool/updates/main/l/linux/${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb"
-          # Fallback to main repo just in case
+          # Fallback to main repo just in case (less likely for security updates)
           DEB_REPO_URL_FALLBACK="http://deb.debian.org/debian"
           DEB_URL_FALLBACK="${DEB_REPO_URL_FALLBACK}/pool/main/l/linux/${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb"
 
-
           echo "Attempting to download Debian 6.1 kernel package..."
+          echo "Package Name: ${DEB_PKG_NAME}"
+          echo "Version: ${DEB_PKG_VERSION}"
+          echo "Architecture: ${DEB_ARCH}"
           echo "Primary URL: ${DEB_URL_PRIMARY}"
           echo "Fallback URL: ${DEB_URL_FALLBACK}"
 
           wget -T 30 -O kernel_pkg.deb "${DEB_URL_PRIMARY}" || {
             echo "WARNING: Failed to download from primary security URL. Trying fallback URL...";
             wget -T 30 -O kernel_pkg.deb "${DEB_URL_FALLBACK}" || {
-              echo "ERROR: Failed to download Debian package ${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb from both URLs. Check package name/version.";
+              echo "ERROR: Failed to download Debian package ${DEB_PKG_NAME}_${DEB_PKG_VERSION}_${DEB_ARCH}.deb from both URLs. Check package name/version/URL path.";
+              # Add extra debugging info if download fails
+              echo "Attempting to list contents of primary repo path:"
+              curl -s "${DEB_REPO_URL_PRIMARY}/pool/updates/main/l/linux/" | grep "amd64.deb" || echo "Failed to list primary repo content."
+              echo "Attempting to list contents of fallback repo path:"
+              curl -s "${DEB_REPO_URL_FALLBACK}/pool/main/l/linux/" | grep "amd64.deb" || echo "Failed to list fallback repo content."
               exit 1;
             }
           }
@@ -104,11 +117,15 @@ jobs:
           echo "Extracting Debian kernel config..."
           mkdir -p ./deb_extract/boot
           dpkg -x kernel_pkg.deb ./deb_extract
-          OFFICIAL_CONFIG_FILE=$(find ./deb_extract/boot/ -name 'config-*' | head -n 1)
+          # Use a more robust find command to handle potential variations in config name
+          OFFICIAL_CONFIG_FILE=$(find ./deb_extract/boot/ -name 'config-6.1.0-0.deb11.*' -type f | head -n 1)
 
           if [ -z "${OFFICIAL_CONFIG_FILE}" ] || [ ! -f "${OFFICIAL_CONFIG_FILE}" ]; then
-            echo "ERROR: Could not find config file in downloaded Debian package!"
-            ls -lR ./deb_extract # Show extracted content for debugging
+            echo "ERROR: Could not find config file matching 'config-6.1.0-0.deb11.*' in downloaded Debian package!"
+            echo "Listing extracted boot directory:"
+            ls -lR ./deb_extract/boot # Show extracted boot content for debugging
+            echo "Listing all extracted files:"
+            find ./deb_extract -type f # List all files to see exactly what was extracted
             exit 1
           fi
           echo "Found official Debian 6.1 config file: ${OFFICIAL_CONFIG_FILE}"
@@ -140,8 +157,10 @@ jobs:
           fi
           # Append -deb11-6.1-base indicator
           LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-6.1-base-${{ matrix.arch }}"
-          LOCAL_VERSION_SUFFIX=$(echo "${LOCAL_VERSION_SUFFIX}" | head -c 64)
+          # Ensure suffix fits within kernel limits (64 chars including the leading '-')
+          LOCAL_VERSION_SUFFIX=$(echo "${LOCAL_VERSION_SUFFIX}" | head -c 63) # Leave space for leading '-' if needed by make
           echo "Setting CONFIG_LOCALVERSION=${LOCAL_VERSION_SUFFIX}"
+          # Use --force-setting if the option might already exist with a different value
           ./scripts/config --set-str LOCALVERSION "${LOCAL_VERSION_SUFFIX}"
 
           echo "--- Finalizing Configuration with Local Version (olddefconfig) ---"
@@ -158,15 +177,17 @@ jobs:
           chmod +x check-config.sh
 
           echo "--- Running check-config.sh ---"
+          # Pass the .config file explicitly to the script
           CHECK_OUTPUT=$(./check-config.sh .config)
           echo "${CHECK_OUTPUT}" # Print the full output
 
           echo "--- Analyzing check-config.sh Results ---"
-          GENERALLY_NECESSARY_OUTPUT=$(echo "${CHECK_OUTPUT}" | awk '/Generally Necessary:/{flag=1; next} /Optional Features:/{flag=0} flag')
-          if echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i '(missing|disabled)'; then
+          # Use more robust parsing in case section headers change slightly
+          GENERALLY_NECESSARY_OUTPUT=$(echo "${CHECK_OUTPUT}" | sed -n '/Generally Necessary:/,/Optional Features:/p' | sed '$d')
+          if echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i 'FAIL|missing|disabled'; then
              echo "ERROR: check-config.sh reported missing or disabled generally necessary options!"
              echo "--- Failing Necessary Section ---"
-             echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i '(missing|disabled)'
+             echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i 'FAIL|missing|disabled'
              echo "---------------------------------"
              exit 1
           else
