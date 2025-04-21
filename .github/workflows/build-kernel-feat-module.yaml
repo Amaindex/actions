@@ -148,6 +148,10 @@ jobs:
           scripts/config --enable NF_CONNTRACK_IPV6
           scripts/config --enable IPTABLES
           scripts/config --enable IP6TABLES
+          scripts/config --enable NFT_MASQ        # Added for MASQUERADE support
+          scripts/config --enable NFT_MASQ_IPV4   # Added for IPv4 MASQUERADE
+          scripts/config --enable NFT_MASQ_IPV6   # Added for IPv6 MASQUERADE
+          scripts/config --enable NF_NAT_MASQUERADE # Added for NAT masquerade
           scripts/config --module VXLAN
           scripts/config --enable BRIDGE_VLAN_FILTERING
           scripts/config --module IPVLAN
@@ -207,7 +211,7 @@ jobs:
           make olddefconfig
 
           echo "--- Configuration Complete. Verifying key options ---"
-          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m|CONFIG_TUN=m|CONFIG_NF_TABLES=y|CONFIG_BR_NETFILTER=y|CONFIG_MEMCG=y|CONFIG_NF_NAT=y|CONFIG_IP_NF_IPTABLES=y|CONFIG_CPUSETS=y|CONFIG_CGROUP_PIDS=y|CONFIG_SECCOMP_FILTER=y|CONFIG_EXT4_FS_POSIX_ACL=y|CONFIG_KEYS=y|CONFIG_POSIX_MQUEUE=y|CONFIG_IP_NF_TARGET_MASQUERADE=y|CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m" .config || true
+          grep -E "CONFIG_VIRTIO_PCI=y|CONFIG_VIRTIO_SCSI=y|CONFIG_BLK_DEV_SD=y|CONFIG_EXT4_FS=y|CONFIG_VIRTIO_NET=m|CONFIG_LOCALVERSION=|CONFIG_OVERLAY_FS=y|CONFIG_NAMESPACES=y|CONFIG_CGROUPS=y|CONFIG_SECCOMP=y|CONFIG_VETH=m|CONFIG_TUN=m|CONFIG_NF_TABLES=y|CONFIG_BR_NETFILTER=y|CONFIG_MEMCG=y|CONFIG_NF_NAT=y|CONFIG_IP_NF_IPTABLES=y|CONFIG_CPUSETS=y|CONFIG_CGROUP_PIDS=y|CONFIG_SECCOMP_FILTER=y|CONFIG_EXT4_FS_POSIX_ACL=y|CONFIG_KEYS=y|CONFIG_POSIX_MQUEUE=y|CONFIG_IP_NF_TARGET_MASQUERADE=y|CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m|CONFIG_NFT_MASQ=y|CONFIG_NF_NAT_MASQUERADE=y" .config || true
 
       - name: Build Kernel and Modules
         run: |
@@ -230,6 +234,8 @@ jobs:
           cp .config kernel_package/boot/config-${KERNEL_SUFFIX}
 
           echo "--- Installing Modules ---"
+          # Clean previous modules to avoid conflicts
+          rm -rf kernel_package/lib/modules/*
           make modules_install INSTALL_MOD_PATH=kernel_package/
 
           echo "--- Verifying Module Directory ---"
@@ -246,6 +252,7 @@ jobs:
           find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "veth.ko" || echo "WARNING: veth.ko not found!"
           find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "xt_conntrack.ko" || echo "WARNING: xt_conntrack.ko not found!"
           find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "xt_addrtype.ko" || echo "WARNING: xt_addrtype.ko not found!"
+          find kernel_package/lib/modules/${KERNEL_SUFFIX} -name "nft_masq.ko" || echo "WARNING: nft_masq.ko not found!"
 
           rm -f kernel_package/lib/modules/${KERNEL_SUFFIX}/build
           rm -f kernel_package/lib/modules/${KERNEL_SUFFIX}/source
