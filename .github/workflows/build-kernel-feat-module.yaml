@@ -1,4 +1,4 @@
-name: Build Kernel for PVE/QEMU VM (Fragment Based - Docker Fixes)
+name: Build Kernel for PVE/QEMU VM (Fragment Based - Docker Fixes v2)
 
 on:
   workflow_dispatch:
@@ -38,8 +38,7 @@ jobs:
         run: |
           echo "--- Creating Configuration Fragments ---"
 
-          # --- Base Server Fragment ---
-          # (Keep the previous base_server.config content here)
+          # --- Base Server Fragment (Added explicit dependencies) ---
           cat <<EOF > base_server.config
           # Core Boot Requirements (Built-in where critical)
           CONFIG_MODULES=y
@@ -51,13 +50,22 @@ jobs:
           CONFIG_VIRTIO_BLK=y
           CONFIG_EXT4_FS=y
           CONFIG_VFAT_FS=y
+          CONFIG_NLS=y                    # Dependency for VFAT, etc.
           CONFIG_PARTITION_ADVANCED=y
           CONFIG_EFI_PARTITION=y
           CONFIG_MSDOS_PARTITION=y
           CONFIG_BLK_DEV_INITRD=y
           CONFIG_DEVTMPFS=y
           CONFIG_DEVTMPFS_MOUNT=y
+          CONFIG_HW_RANDOM=y              # Dependency for HW_RANDOM_VIRTIO
           CONFIG_HW_RANDOM_VIRTIO=y
+          CONFIG_TMPFS=y                  # Base for TMPFS features
+          CONFIG_FS_POSIX_ACL=y           # Base for POSIX ACL support
+          CONFIG_FS_XATTR=y               # Base for Extended Attributes
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_INET=y                   # Enable IPv4 networking core
+          CONFIG_IPV6=y                   # Enable IPv6 networking core
 
           # Common Server Features (Modules where appropriate)
           CONFIG_VIRTIO_NET=m
@@ -74,8 +82,8 @@ jobs:
           CONFIG_NFS_FS=m
           CONFIG_NFSD=m
           CONFIG_ISO9660_FS=m
-          CONFIG_BRIDGE=m                 # Bridge support itself (needed by docker0)
-          CONFIG_VLAN_8021Q=m
+          CONFIG_BRIDGE=y                 # Bridge support itself, built-in
+          CONFIG_VLAN_8021Q=y             # VLAN support, built-in (for Bridge VLAN Filtering=y)
           CONFIG_AHCI=m
           CONFIG_ATA_PIIX=m
           CONFIG_SCSI_SAS_LIBSAS=m
@@ -84,11 +92,9 @@ jobs:
           CONFIG_CRYPTO_CBC=y
           CONFIG_CRYPTO_XTS=y
           CONFIG_CRYPTO_AES_X86_64=m
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_TMPFS_XATTR=y
           EOF
 
-          # --- Docker Support Fragment (Revised based on logs) ---
+          # --- Docker Support Fragment (Adjusted IPVS dependencies) ---
           cat <<EOF > docker.config
           # Filesystems & Core Features
           CONFIG_OVERLAY_FS=y
@@ -113,6 +119,7 @@ jobs:
           CONFIG_CGROUP_BPF=y
 
           # Security
+          CONFIG_SECURITY=y               # Base for security features
           CONFIG_SECCOMP=y
           CONFIG_SECCOMP_FILTER=y
           CONFIG_SECURITY_APPARMOR=m
@@ -122,24 +129,23 @@ jobs:
           CONFIG_EXT4_FS_SECURITY=y
           CONFIG_POSIX_MQUEUE=y
 
-          # --- Networking (Crucial Fixes based on logs) ---
-          CONFIG_NETFILTER=y              # Core Netfilter
-          CONFIG_BRIDGE_NETFILTER=y       # *** FIX: Enable bridge netfilter (br_netfilter), built-in ***
-          CONFIG_BRIDGE_VLAN_FILTERING=y  # Often needed for bridge setups
+          # --- Networking ---
+          CONFIG_NETFILTER=y
+          CONFIG_BRIDGE_NETFILTER=y
+          CONFIG_BRIDGE_VLAN_FILTERING=y
 
-          # Core NAT Framework (Required by both iptables/nftables)
-          CONFIG_NF_NAT=y                 # *** FIX: Ensure core NAT is built-in ***
+          # Core NAT Framework
+          CONFIG_NF_NAT=y
 
-          # iptables Backend Support (Legacy + Compatibility)
-          CONFIG_NETFILTER_XTABLES=y      # Core xtables support
-          CONFIG_IP_NF_IPTABLES=y         # Enable iptables support
-          CONFIG_IP_NF_FILTER=y           # iptables FILTER table
-          CONFIG_IP_NF_NAT=y              # iptables NAT table support
-          CONFIG_IP_NF_MANGLE=y           # iptables MANGLE table support
-          CONFIG_IP_NF_RAW=m              # iptables RAW table (module OK)
-          CONFIG_IP_NF_TARGET_MASQUERADE=y # *** FIX: Ensure legacy MASQUERADE target is built-in ***
-          CONFIG_IP_NF_TARGET_REDIRECT=m  # REDIRECT target (module OK)
-          # IPv6 iptables support (Enable if needed)
+          # iptables Backend Support
+          CONFIG_NETFILTER_XTABLES=y
+          CONFIG_IP_NF_IPTABLES=y
+          CONFIG_IP_NF_FILTER=y
+          CONFIG_IP_NF_NAT=y
+          CONFIG_IP_NF_MANGLE=y
+          CONFIG_IP_NF_RAW=m
+          CONFIG_IP_NF_TARGET_MASQUERADE=y
+          CONFIG_IP_NF_TARGET_REDIRECT=m
           CONFIG_IP6_NF_IPTABLES=y
           CONFIG_IP6_NF_FILTER=m
           CONFIG_IP6_NF_MANGLE=m
@@ -147,27 +153,27 @@ jobs:
           CONFIG_IP6_NF_NAT=m
           CONFIG_IP6_NF_TARGET_MASQUERADE=m
 
-          # nf_tables Backend Support (Needed for modern iptables/nft)
-          CONFIG_NF_TABLES=y              # *** FIX: Ensure NF_TABLES is built-in ***
-          CONFIG_NF_TABLES_IPV4=y         # NFtables for IPv4
-          CONFIG_NF_TABLES_IPV6=y         # NFtables for IPv6
-          CONFIG_NFT_CT=y                 # NFtables conntrack support
-          CONFIG_NFT_CHAIN_NAT=y          # *** FIX: Allow NAT chains in nftables, built-in ***
-          CONFIG_NF_NAT_IPV4=y            # NFtables IPv4 NAT support
-          CONFIG_NF_NAT_IPV6=y            # NFtables IPv6 NAT support
-          CONFIG_NFT_MASQ=y               # *** FIX: NFtables MASQUERADE target, built-in ***
-          CONFIG_NFT_MASQ_IPV4=y          # *** FIX: NFtables MASQUERADE for IPv4, built-in ***
-          CONFIG_NFT_MASQ_IPV6=y          # *** FIX: NFtables MASQUERADE for IPv6, built-in ***
-          CONFIG_NFT_FIB_INET=y           # NFtables routing integration
+          # nf_tables Backend Support
+          CONFIG_NF_TABLES=y
+          CONFIG_NF_TABLES_IPV4=y
+          CONFIG_NF_TABLES_IPV6=y
+          CONFIG_NFT_CT=y
+          CONFIG_NFT_CHAIN_NAT=y
+          CONFIG_NF_NAT_IPV4=y
+          CONFIG_NF_NAT_IPV6=y
+          CONFIG_NFT_MASQ=y
+          CONFIG_NFT_MASQ_IPV4=y
+          CONFIG_NFT_MASQ_IPV6=y
+          CONFIG_NFT_FIB_INET=y
 
-          # Netfilter Conntrack (Dependency for NAT)
-          CONFIG_NF_CONNTRACK=y           # *** FIX: Ensure connection tracking is built-in ***
+          # Netfilter Conntrack
+          CONFIG_NF_CONNTRACK=y
           CONFIG_NF_CONNTRACK_IPV4=y
           CONFIG_NF_CONNTRACK_IPV6=y
 
           # Netfilter Matches & Helpers
           CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=m
-          CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m # Needed by Docker rules
+          CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m
           CONFIG_NETFILTER_XT_MATCH_IPVS=m
           CONFIG_NETFILTER_XT_MARK=m
           CONFIG_NF_NAT_FTP=m
@@ -176,39 +182,29 @@ jobs:
           CONFIG_NF_CONNTRACK_TFTP=m
 
           # Networking (Virtual Devices)
-          CONFIG_VETH=m                   # Essential for container pairs
+          CONFIG_VETH=m
           CONFIG_IPVLAN=m
           CONFIG_MACVLAN=m
           CONFIG_DUMMY=m
 
-          # IPVS (Optional, for Kubernetes)
+          # IPVS (Optional, keep dependencies consistent as modules)
           CONFIG_IP_VS=m
-          CONFIG_IP_VS_NFCT=y
-          CONFIG_IP_VS_PROTO_TCP=y
-          CONFIG_IP_VS_PROTO_UDP=y
+          CONFIG_IP_VS_NFCT=m             # Set to =m as base IP_VS is =m
+          CONFIG_IP_VS_PROTO_TCP=m        # Set to =m as base IP_VS is =m
+          CONFIG_IP_VS_PROTO_UDP=m        # Set to =m as base IP_VS is =m
           CONFIG_IP_VS_RR=m
           EOF
 
           # --- Tailscale Support Fragment ---
-          # Many options overlap with Docker and are now set to '=y' there.
-          # This fragment now mainly ensures TUN and specific extras if needed.
           cat <<EOF > tailscale.config
           CONFIG_TUN=m                  # TUN device support
-          CONFIG_INET=y                 # Already enabled
-          CONFIG_IPV6=y                 # Already enabled
-
-          # Core Netfilter/NAT/NFtables already covered and set to =y in docker.config
-
-          # IPTables legacy (Also covered in docker.config)
-          # CONFIG_IP_TABLES=y # Old name, NF_IPTABLES is preferred
-          # CONFIG_IP6_TABLES=y
+          # INET, IPV6, Netfilter/NAT/NFtables covered in base/docker configs
 
           # Other Networking Features
-          CONFIG_VXLAN=m                # Useful for some overlay networks
+          CONFIG_VXLAN=m
           EOF
 
-          # --- Debug Fragment ---
-          # (Keep the previous debug.config content here)
+          # --- Debug Fragment (Added IKCONFIG) ---
           cat <<EOF > debug.config
           CONFIG_DEBUG_KERNEL=y
           CONFIG_DEBUG_INFO=y
@@ -220,10 +216,11 @@ jobs:
           CONFIG_KPROBES=y
           CONFIG_KGDB=y
           CONFIG_MAGIC_SYSRQ=y
+          CONFIG_IKCONFIG=y             # Enable kernel config access via /proc/config.gz
+          CONFIG_IKCONFIG_PROC=y        # Provide kernel config via /proc/config.gz
           EOF
 
           # --- Disable Unnecessary Fragment ---
-          # (Keep the previous disable.config content here)
           cat <<EOF > disable.config
           # CONFIG_DRM is not set
           # CONFIG_SND is not set
@@ -242,7 +239,6 @@ jobs:
           make defconfig
 
           echo "--- Merging Custom Configuration Fragments ---"
-          # Merge order ensures docker specific needs might override base if needed
           ./scripts/kconfig/merge_config.sh -m .config \
               base_server.config \
               docker.config \
