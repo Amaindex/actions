@@ -10,7 +10,7 @@ on:
       config_name:
         description: 'Name of kernel config file in build-kernel/ directory'
         required: true
-        default: 'config-6.12.24-0-virt'
+        default: 'config-6.12.24-0-virt-edited'
 
 jobs:
   build-kernel:
