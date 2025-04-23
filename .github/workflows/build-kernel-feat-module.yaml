@@ -11,10 +11,6 @@ on:
         description: 'Name of kernel config file in build-kernel/ directory'
         required: true
         default: 'config-6.12.24-0-virt'
-      build_number:
-        description: 'Optional build number suffix (e.g., 147)'
-        required: false
-        default: ''
 
 jobs:
   build-kernel:
@@ -98,14 +94,8 @@ jobs:
           echo "--- Verifying Signature Options ---"
           grep -E 'CONFIG_MODULE_SIG|CONFIG_SYSTEM_TRUSTED_KEYRING|CONFIG_SYSTEM_TRUSTED_KEYS|CONFIG_SYSTEM_REVOCATION' .config || echo "No signature options found"
 
-          echo "--- Setting Kernel Version Suffix ---"
-          LOCAL_VERSION_SUFFIX=""
-          if [ -n "${{ github.event.inputs.build_number }}" ]; then
-            LOCAL_VERSION_SUFFIX="-${{ github.event.inputs.build_number }}"
-          fi
-          LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-6.1-local-${{ matrix.arch }}"
-          LOCAL_VERSION_SUFFIX=$(echo "${LOCAL_VERSION_SUFFIX}" | head -c 63)
-          ./scripts/config --set-str LOCALVERSION "${LOCAL_VERSION_SUFFIX}"
+          echo "--- Ensuring No Local Version Suffix ---"
+          ./scripts/config --set-str LOCALVERSION ""
           make olddefconfig
 
       - name: Build Kernel and Modules
@@ -129,6 +119,15 @@ jobs:
           cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_SUFFIX}
           cp System.map ${INSTALL_PATH}/boot/System.map-${KERNEL_SUFFIX}
           cp .config ${INSTALL_PATH}/boot/config-${KERNEL_SUFFIX}
+
+          echo "--- Creating Extlinux Config Snippet ---"
+          cat <<EOF > ${INSTALL_PATH}/boot/extlinux.conf.snippet
+          DEFAULT virt
+          LABEL virt
+              LINUX vmlinuz-${KERNEL_SUFFIX}
+              INITRD initramfs-virt
+              APPEND root=/dev/vda1 console=ttyS0
+          EOF
 
           echo "--- Installing Modules ---"
           make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
