@@ -1,4 +1,4 @@
-name: Build Kernel for Debian 11 VM (Using Local Config + Debug/Ftrace)
+name: Build Kernel for VM (Using Local Config + Debug/Ftrace)
 
 on:
   workflow_dispatch:
