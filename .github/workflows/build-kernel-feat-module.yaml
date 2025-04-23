@@ -67,8 +67,16 @@ jobs:
           CONFIG_IKCONFIG_PROC=y
           EOF
 
-          echo "--- Merging Debug/Ftrace Configuration ---"
-          ./scripts/kconfig/merge_config.sh -m .config debug.config
+          echo "--- Creating Signature Disable Config Fragment ---"
+          cat <<EOF > signature_disable.config
+          CONFIG_MODULE_SIG=n
+          CONFIG_SYSTEM_TRUSTED_KEYRING=n
+          CONFIG_SYSTEM_TRUSTED_KEYS=""
+          CONFIG_SYSTEM_REVOCATION_KEYS=""
+          EOF
+
+          echo "--- Merging Configurations ---"
+          ./scripts/kconfig/merge_config.sh -m .config debug.config signature_disable.config
 
           echo "--- Finalizing Configuration ---"
           make olddefconfig
