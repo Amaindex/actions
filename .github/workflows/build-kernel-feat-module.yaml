@@ -1,5 +1,4 @@
-# Action Workflow File
-name: Build Kernel for Debian 11 VM (Using Local 6.1 Base Config + Check Script)
+name: Build Kernel for Debian 11 VM (Using Local Config + Debug/Ftrace)
 
 on:
   workflow_dispatch:
@@ -8,6 +7,10 @@ on:
         description: 'Branch to build (e.g., ax from amaindex/linux)'
         required: true
         default: 'ax'
+      config_name:
+        description: 'Name of kernel config file in build-kernel/ directory'
+        required: true
+        default: 'config-6.12.24-0-virt'
       build_number:
         description: 'Optional build number suffix (e.g., 147)'
         required: false
@@ -18,57 +21,37 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64] # Keep targeting amd64
+        arch: [amd64]
 
     steps:
-      - name: Checkout Project Repository (including local config)
-        # This checkout gets your *project* repo, containing the workflow and the config file
+      - name: Checkout Project Repository
         uses: actions/checkout@v4
 
-      - name: Checkout Linux Repository (kernel source)
+      - name: Checkout Linux Repository
         uses: actions/checkout@v4
         with:
           repository: amaindex/linux
           ref: ${{ github.event.inputs.branch }}
-          path: linux_source # Checkout kernel source into a subdirectory
-          # fetch-depth: 0 # Consider full clone if needed
+          path: linux_source
 
-      - name: Install Build Dependencies and Debian Tools
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
-                                  gcc make libncurses-dev kmod cpio dwarves pahole rsync \
-                                  git \
-                                  wget dpkg bash # Need bash for the check script
+                                  gcc make libncurses-dev kmod cpio dwarves pahole rsync
 
-      - name: Configure Kernel using Local Debian 6.1 Base Config
-        # Change working directory to where the kernel source was checked out
+      - name: Configure Kernel
         working-directory: ./linux_source
         run: |
-          echo "--- Using local base config file ---"
-          # The path to the config file is relative to the *original* workspace root
-          LOCAL_CONFIG_PATH="../build-kernel/custom-config"
-
+          echo "--- Using local config file ---"
+          LOCAL_CONFIG_PATH="../build-kernel/${{ github.event.inputs.config_name }}"
           if [ ! -f "${LOCAL_CONFIG_PATH}" ]; then
-             echo "ERROR: Local base config file not found at expected path: ${LOCAL_CONFIG_PATH}"
-             echo "Current directory: $(pwd)"
-             echo "Workspace contents:"
-             ls -l ..
-             exit 1
+            echo "ERROR: Config file not found at ${LOCAL_CONFIG_PATH}"
+            exit 1
           fi
-
-          echo "Copying local base config ${LOCAL_CONFIG_PATH} to .config"
           cp "${LOCAL_CONFIG_PATH}" .config
 
-          echo "--- Base .config is now from the local file ---"
-          ls -l .config
-
-          echo "--- Creating Minimal Custom Fragments ---"
-          # Create fragments in the current working directory (linux_source)
-          cat <<EOF > tailscale.config
-          CONFIG_TUN=m
-          CONFIG_VXLAN=m
-          EOF
+          echo "--- Creating Debug/Ftrace Config Fragment ---"
           cat <<EOF > debug.config
           CONFIG_DEBUG_KERNEL=y
           CONFIG_DEBUG_INFO=y
@@ -83,114 +66,36 @@ jobs:
           CONFIG_IKCONFIG=y
           CONFIG_IKCONFIG_PROC=y
           EOF
-          cat <<EOF > disable.config
-          # CONFIG_DRM is not set
-          # CONFIG_SND is not set
-          # CONFIG_SOUND is not set
-          # CONFIG_USB_COMMON is not set
-          # CONFIG_HID is not set
-          # CONFIG_CFG80211 is not set
-          # CONFIG_TIGON3 is not set
-          # CONFIG_E100 is not set
-          # CONFIG_E1000E is not set
-          # CONFIG_R8169 is not set
-          # CONFIG_BNX2 is not set
-          EOF
 
-          # Merge and Finalize Config
-          echo "--- Merging MINIMAL Custom Configuration Fragments ---"
-          ./scripts/kconfig/merge_config.sh -m .config \
-              tailscale.config \
-              debug.config \
-              disable.config
+          echo "--- Merging Debug/Ftrace Configuration ---"
+          ./scripts/kconfig/merge_config.sh -m .config debug.config
 
-          echo "--- Applying Merged Configuration (olddefconfig) ---"
+          echo "--- Finalizing Configuration ---"
           make olddefconfig
 
-          echo "--- Setting Kernel Version Suffix (CONFIG_LOCALVERSION) ---"
+          echo "--- Setting Kernel Version Suffix ---"
           LOCAL_VERSION_SUFFIX=""
           if [ -n "${{ github.event.inputs.build_number }}" ]; then
             LOCAL_VERSION_SUFFIX="-${{ github.event.inputs.build_number }}"
           fi
           LOCAL_VERSION_SUFFIX="${LOCAL_VERSION_SUFFIX}-deb11-6.1-local-${{ matrix.arch }}"
           LOCAL_VERSION_SUFFIX=$(echo "${LOCAL_VERSION_SUFFIX}" | head -c 63)
-          echo "Setting CONFIG_LOCALVERSION=${LOCAL_VERSION_SUFFIX}"
           ./scripts/config --set-str LOCALVERSION "${LOCAL_VERSION_SUFFIX}"
-
-          echo "--- Finalizing Configuration with Local Version (olddefconfig) ---"
           make olddefconfig
 
-          echo "--- Final .config generated ---"
-          ls -l .config
-
-      # ***** THIS STEP IS MODIFIED *****
-      - name: Check Kernel Config for Docker Compatibility
-        working-directory: ./linux_source # Ensure this runs in the right place
-        # Explicitly use bash without -e to allow capturing output even on failure
-        shell: bash {0}
-        run: |
-          echo "--- Downloading check-config.sh ---"
-          wget -O check-config.sh https://raw.githubusercontent.com/moby/moby/master/contrib/check-config.sh
-          chmod +x check-config.sh
-
-          echo "--- Running check-config.sh ---"
-          # Capture stdout and stderr, then capture the exit code
-          CHECK_OUTPUT=$(./check-config.sh .config 2>&1)
-          EXIT_CODE=$?
-
-          echo "--- check-config.sh raw output (stdout & stderr) ---"
-          echo "${CHECK_OUTPUT}"
-          echo "--- check-config.sh exit code: ${EXIT_CODE} ---"
-
-          # Initialize failure flag
-          CONFIG_CHECK_FAILED=0
-
-          # Analyze output content for missing necessary options
-          echo "--- Analyzing check-config.sh Results ---"
-          GENERALLY_NECESSARY_OUTPUT=$(echo "${CHECK_OUTPUT}" | sed -n '/Generally Necessary:/,/Optional Features:/p' | sed '$d')
-          if echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i 'FAIL|missing|disabled'; then
-             echo "ERROR: check-config.sh reported missing or disabled generally necessary options!"
-             echo "--- Failing Necessary Section ---"
-             echo "${GENERALLY_NECESSARY_OUTPUT}" | grep -E -i 'FAIL|missing|disabled'
-             echo "---------------------------------"
-             CONFIG_CHECK_FAILED=1 # Mark as failed based on content
-          else
-             # Only report OK if the check based on content passed
-             # We will check the exit code separately
-             echo "Content Check: All generally necessary options seem to be enabled in the output."
-          fi
-
-          # Check if the script itself failed to execute properly
-          if [ ${EXIT_CODE} -ne 0 ]; then
-              echo "ERROR: check-config.sh script execution failed with exit code ${EXIT_CODE}."
-              # Decide if script execution failure should also fail the build
-              # CONFIG_CHECK_FAILED=1 # Uncomment if script failure itself is critical
-          fi
-
-          # Final decision: exit if any check failed
-          if [ ${CONFIG_CHECK_FAILED} -ne 0 ]; then
-              echo "--- Configuration Check FAILED ---"
-              exit 1
-          else
-              echo "--- Configuration Check PASSED ---"
-          fi
-
       - name: Build Kernel and Modules
-        working-directory: ./linux_source # Ensure this runs in the right place
+        working-directory: ./linux_source
         run: |
           make -j$(nproc) bzImage
           make -j$(nproc) modules
 
-      - name: Prepare Kernel Package for Manual Install
-        working-directory: ./linux_source # Ensure this runs in the right place
+      - name: Prepare Kernel Package
+        working-directory: ./linux_source
         run: |
-          echo "--- Determining Full Kernel Version ---"
+          echo "--- Determining Kernel Version ---"
           KERNEL_SUFFIX=$(make -s kernelrelease)
-          echo "Full Kernel Version Suffix: ${KERNEL_SUFFIX}"
-          # Output KERNEL_SUFFIX to GITHUB_ENV so the upload step can use it
           echo "KERNEL_SUFFIX=${KERNEL_SUFFIX}" >> $GITHUB_ENV
 
-          # Use an absolute path for INSTALL_PATH relative to workspace root
           INSTALL_PATH=${GITHUB_WORKSPACE}/_install
           mkdir -p ${INSTALL_PATH}/boot
           mkdir -p ${INSTALL_PATH}/lib/modules
@@ -198,33 +103,20 @@ jobs:
           echo "--- Copying Kernel Files ---"
           cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_SUFFIX}
           cp System.map ${INSTALL_PATH}/boot/System.map-${KERNEL_SUFFIX}
-          cp .config ${INSTALL_PATH}/boot/config-${KERNEL_SUFFIX} # Copy from current dir (linux_source)
+          cp .config ${INSTALL_PATH}/boot/config-${KERNEL_SUFFIX}
 
           echo "--- Installing Modules ---"
           make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
 
-          echo "--- Verifying Module Directory Existence ---"
-          if [ ! -d "${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}" ]; then
-            echo "ERROR: Module directory ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX} was not created!"
-            ls -l ${INSTALL_PATH}/lib/modules/
-            exit 1
-          fi
-          echo "Module directory found: ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}"
-
           rm -f ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
           rm -f ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/source
 
-          echo "--- Kernel Package Contents (Staging) ---"
-          ls -lR ${INSTALL_PATH}/
-
           echo "--- Creating Tarball ---"
-          # Create tarball relative to workspace root
           tar -czvf ${GITHUB_WORKSPACE}/linux-kernel-package-${KERNEL_SUFFIX}.tar.gz -C ${INSTALL_PATH} .
 
       - name: Upload Kernel Package Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-kernel-package-${{ env.KERNEL_SUFFIX }} # env var should be available
-          # Path is relative to the GITHUB_WORKSPACE
+          name: linux-kernel-package-${{ env.KERNEL_SUFFIX }}
           path: linux-kernel-package-${{ env.KERNEL_SUFFIX }}.tar.gz
           retention-days: 90
