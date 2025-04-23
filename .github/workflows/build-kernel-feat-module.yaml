@@ -63,20 +63,8 @@ jobs:
           CONFIG_IKCONFIG_PROC=y
           EOF
 
-          echo "--- Creating Signature Disable Config Fragment ---"
-          cat <<EOF > signature_disable.config
-          CONFIG_MODULE_SIG=n
-          CONFIG_MODULE_SIG_ALL=n
-          CONFIG_MODULE_SIG_FORCE=n
-          CONFIG_MODULE_SIG_KEY=""
-          CONFIG_SYSTEM_TRUSTED_KEYRING=n
-          CONFIG_SYSTEM_TRUSTED_KEYS=""
-          CONFIG_SYSTEM_REVOCATION_LIST=n
-          CONFIG_SYSTEM_REVOCATION_KEYS=""
-          EOF
-
           echo "--- Merging Configurations ---"
-          ./scripts/kconfig/merge_config.sh -m .config debug.config signature_disable.config
+          ./scripts/kconfig/merge_config.sh -m .config debug.config
 
           echo "--- Ensuring Signature Options are Disabled ---"
           ./scripts/config --disable MODULE_SIG
