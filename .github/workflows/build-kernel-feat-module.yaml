@@ -52,6 +52,8 @@ jobs:
           CONFIG_DEBUG_KERNEL=y
           CONFIG_DEBUG_INFO=y
           CONFIG_DEBUG_INFO_DWARF5=y
+          CONFIG_DEBUG_INFO_BTF=y
+          CONFIG_DEBUG_INFO_REDUCED=n
           CONFIG_GDB_SCRIPTS=y
           CONFIG_FTRACE=y
           CONFIG_FUNCTION_TRACER=y
@@ -61,6 +63,10 @@ jobs:
           CONFIG_MAGIC_SYSRQ=y
           CONFIG_IKCONFIG=y
           CONFIG_IKCONFIG_PROC=y
+          CONFIG_KHEADERS=y
+          CONFIG_BPF=y
+          CONFIG_BPF_SYSCALL=y
+          CONFIG_BPF_JIT=y
           EOF
 
           echo "--- Merging Configurations ---"
@@ -102,6 +108,7 @@ jobs:
           INSTALL_PATH=${GITHUB_WORKSPACE}/_install
           mkdir -p ${INSTALL_PATH}/boot
           mkdir -p ${INSTALL_PATH}/lib/modules
+          mkdir -p ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
 
           echo "--- Copying Kernel Files ---"
           cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_SUFFIX}
@@ -120,8 +127,57 @@ jobs:
           echo "--- Installing Modules ---"
           make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
 
-          rm -f ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
-          rm -f ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/source
+          echo "--- Installing Kernel Headers ---"
+          make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
+
+          echo "--- Creating build and source Symlinks ---"
+          ln -sf ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX} ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
+          ln -sf ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX} ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/source
+
+          echo "--- Verifying Module Installation ---"
+          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}
+          depmod -b ${INSTALL_PATH} -F System.map ${KERNEL_SUFFIX}
+
+          echo "--- Creating Installation Instructions ---"
+          cat <<EOF > ${INSTALL_PATH}/README.md
+          # Kernel Installation Instructions
+
+          This package contains a custom Linux kernel (${KERNEL_SUFFIX}) with debugging and development support.
+
+          ## Installation Steps
+
+          1. **Extract the tarball**:
+             \`\`\`bash
+             sudo tar -xzvf linux-kernel-package-${KERNEL_SUFFIX}.tar.gz -C /
+             \`\`\`
+
+          2. **Update module dependencies**:
+             \`\`\`bash
+             sudo depmod ${KERNEL_SUFFIX}
+             \`\`\`
+
+          3. **Ensure headers are accessible**:
+             \`\`\`bash
+             sudo ln -sf /usr/src/linux-headers-${KERNEL_SUFFIX} /lib/modules/${KERNEL_SUFFIX}/build
+             sudo ln -sf /usr/src/linux-headers-${KERNEL_SUFFIX} /lib/modules/${KERNEL_SUFFIX}/source
+             \`\`\`
+
+          4. **Update bootloader (e.g., GRUB or extlinux)**:
+             \`\`\`bash
+             sudo update-grub
+             \`\`\`
+
+          5. **Reboot to the new kernel**:
+             \`\`\`bash
+             sudo reboot
+             \`\`\`
+
+          ## Notes
+          - The kernel includes support for debugging (Ftrace, Kprobes, KGDB), BPF (for tools like bcc), and kheaders (/sys/kernel/kheaders.tar.xz).
+          - Ensure /sys/kernel/debug is mounted for debugging tools.
+          - For bcc, mount required directories as shown in your Docker command.
+
+          EOF
 
           echo "--- Creating Tarball ---"
           tar -czvf ${GITHUB_WORKSPACE}/linux-kernel-package-${KERNEL_SUFFIX}.tar.gz -C ${INSTALL_PATH} .
