@@ -10,18 +10,24 @@ on:
       config_name:
         description: 'Name of kernel config file in build-kernel/ directory'
         required: true
-        default: 'config-6.12.24-0-virt-edited'
+        default: 'config-6.12.24-0-virt-edited' # Example config name
 
 jobs:
   build-kernel:
     runs-on: ubuntu-latest
+    # Define INSTALL_PATH at the job level for accessibility in multiple steps if needed
+    # Alternatively, just use GITHUB_WORKSPACE directly within steps
+    env:
+      INSTALL_DIR_NAME: _install # Define a consistent directory name
+
     strategy:
       matrix:
-        arch: [amd64]
+        arch: [amd64] # Currently only builds amd64
 
     steps:
       - name: Checkout Project Repository
         uses: actions/checkout@v4
+        # This repo contains the workflow and the build-kernel/ directory
 
       - name: Checkout Linux Repository
         uses: actions/checkout@v4
@@ -29,12 +35,16 @@ jobs:
           repository: amaindex/linux
           ref: ${{ github.event.inputs.branch }}
           path: linux_source
+          # Fetch depth 0 for full history needed by some tools, though maybe not strictly for build
+          # fetch-depth: 0 # Uncomment if needed, increases checkout time
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
+          # dwarves is needed forpahole >= 5.1 and CONFIG_DEBUG_INFO_BTF=y
           sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
-                                  gcc make libncurses-dev kmod cpio dwarves pahole rsync
+                                  gcc make libncurses-dev kmod cpio dwarves pahole rsync \
+                                  libbpf-dev # Often useful with BPF features
 
       - name: Configure Kernel
         working-directory: ./linux_source
@@ -46,169 +56,237 @@ jobs:
             exit 1
           fi
           cp "${LOCAL_CONFIG_PATH}" .config
+          echo "Local config '${LOCAL_CONFIG_PATH}' copied to .config"
 
           echo "--- Creating Debug/Ftrace Config Fragment ---"
           cat <<EOF > debug.config
+          # Debugging and Tracing Options
           CONFIG_DEBUG_KERNEL=y
           CONFIG_DEBUG_INFO=y
-          CONFIG_DEBUG_INFO_DWARF5=y
-          CONFIG_DEBUG_INFO_BTF=y
+          # CONFIG_DEBUG_INFO_DWARF5=y # DWARF5 is often preferred
+          CONFIG_DEBUG_INFO_BTF=y   # Requires pahole and dwarves
           CONFIG_DEBUG_INFO_REDUCED=n
           CONFIG_GDB_SCRIPTS=y
           CONFIG_FTRACE=y
           CONFIG_FUNCTION_TRACER=y
           CONFIG_FUNCTION_GRAPH_TRACER=y
           CONFIG_KPROBES=y
-          CONFIG_KGDB=y
+          # CONFIG_KGDB=y # Enable if kernel debugging via GDB is needed
           CONFIG_MAGIC_SYSRQ=y
           CONFIG_IKCONFIG=y
           CONFIG_IKCONFIG_PROC=y
-          CONFIG_KHEADERS=y
+          CONFIG_KHEADERS=y         # Needed for packaging headers for module builds
+          # BPF Options
           CONFIG_BPF=y
           CONFIG_BPF_SYSCALL=y
           CONFIG_BPF_JIT=y
+          CONFIG_BPF_JIT_ALWAYS_ON=y
+          CONFIG_BPF_EVENTS=y
+          # Add other desired BPF options here if needed
           EOF
 
           echo "--- Merging Configurations ---"
           ./scripts/kconfig/merge_config.sh -m .config debug.config
+          echo "Merged debug.config fragment"
 
           echo "--- Ensuring Signature Options are Disabled ---"
           ./scripts/config --disable MODULE_SIG
           ./scripts/config --disable MODULE_SIG_ALL
           ./scripts/config --disable MODULE_SIG_FORCE
-          ./scripts/config --set-str MODULE_SIG_KEY ""
+          # ./scripts/config --set-str MODULE_SIG_KEY "" # Setting empty string might cause issues, disabling is enough
           ./scripts/config --disable SYSTEM_TRUSTED_KEYRING
-          ./scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
+          # ./scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
           ./scripts/config --disable SYSTEM_REVOCATION_LIST
-          ./scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
-
-          echo "--- Finalizing Configuration ---"
-          make olddefconfig
-
-          echo "--- Verifying Signature Options ---"
-          grep -E 'CONFIG_MODULE_SIG|CONFIG_SYSTEM_TRUSTED_KEYRING|CONFIG_SYSTEM_TRUSTED_KEYS|CONFIG_SYSTEM_REVOCATION' .config || echo "No signature options found"
+          # ./scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
+          echo "Disabled module and system signature options"
 
           echo "--- Ensuring No Local Version Suffix ---"
           ./scripts/config --set-str LOCALVERSION ""
+          echo "Set LOCALVERSION to empty"
+
+          echo "--- Finalizing Configuration (olddefconfig) ---"
+          # Use make olddefconfig to resolve dependencies and apply defaults
           make olddefconfig
+
+          echo "--- Verifying Final Config ---"
+          echo "Checking Signature Options (should be unset or 'n'):"
+          grep -E 'CONFIG_MODULE_SIG=|CONFIG_SYSTEM_TRUSTED_KEYRING=|CONFIG_SYSTEM_REVOCATION_LIST=' .config || echo "Signature options appear disabled."
+          echo "Checking LOCALVERSION (should be empty):"
+          grep 'CONFIG_LOCALVERSION=' .config
+          echo "Checking KHEADERS (should be 'y'):"
+          grep 'CONFIG_KHEADERS=' .config
+          echo "Checking BTF (should be 'y'):"
+          grep 'CONFIG_DEBUG_INFO_BTF=' .config
+
 
       - name: Build Kernel and Modules
         working-directory: ./linux_source
         run: |
+          echo "--- Building Kernel Image (bzImage) ---"
           make -j$(nproc) bzImage
+          echo "--- Building Modules ---"
           make -j$(nproc) modules
 
       - name: Prepare Kernel Package
+        id: prepare # Give this step an id to access its outputs if needed
         working-directory: ./linux_source
         run: |
           echo "--- Determining Kernel Version ---"
-          KERNEL_SUFFIX=$(make -s kernelrelease)
-          echo "KERNEL_SUFFIX=${KERNEL_SUFFIX}" >> $GITHUB_ENV
+          # Use make kernelrelease to get the exact version string used for modules etc.
+          KERNEL_VERSION=$(make -s kernelrelease)
+          if [ -z "${KERNEL_VERSION}" ]; then
+            echo "ERROR: Failed to determine kernel version."
+            exit 1
+          fi
+          echo "Determined Kernel Version: ${KERNEL_VERSION}"
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
 
-          INSTALL_PATH=${GITHUB_WORKSPACE}/_install
+          # Define the installation path within the workspace
+          INSTALL_PATH="${GITHUB_WORKSPACE}/${INSTALL_DIR_NAME}"
+          echo "Installation staging directory: ${INSTALL_PATH}"
           mkdir -p ${INSTALL_PATH}/boot
-          mkdir -p ${INSTALL_PATH}/lib/modules
-          mkdir -p ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
-          mkdir -p ${INSTALL_PATH}/usr/include/linux
-          mkdir -p ${INSTALL_PATH}/usr/include/asm
+          mkdir -p ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}
+          # Headers for building external modules go here
+          mkdir -p ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}
 
           echo "--- Copying Kernel Files ---"
-          cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_SUFFIX}
-          cp System.map ${INSTALL_PATH}/boot/System.map-${KERNEL_SUFFIX}
-          cp .config ${INSTALL_PATH}/boot/config-${KERNEL_SUFFIX}
+          cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_VERSION}
+          cp System.map ${INSTALL_PATH}/boot/System.map-${KERNEL_VERSION}
+          cp .config ${INSTALL_PATH}/boot/config-${KERNEL_VERSION}
+          echo "Copied bzImage, System.map, .config to ${INSTALL_PATH}/boot/"
 
-          echo "--- Creating Extlinux Config Snippet ---"
-          cat <<EOF > ${INSTALL_PATH}/boot/extlinux.conf.snippet
-          DEFAULT virt
-          LABEL virt
-              LINUX vmlinuz-${KERNEL_SUFFIX}
-              INITRD initramfs-virt
-              APPEND root=/dev/vda1 console=ttyS0
-          EOF
+          # Note: Initramfs is NOT built here. It should be generated on the target system.
 
           echo "--- Installing Modules ---"
+          # Installs modules into ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/kernel/
           make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
+          echo "Installed modules to ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}"
 
-          echo "--- Installing Kernel Headers ---"
-          make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
-
-          echo "--- Installing User-Space Headers ---"
-          cp -r include/uapi/linux/* ${INSTALL_PATH}/usr/include/linux/
-          cp -r include/uapi/asm-generic/* ${INSTALL_PATH}/usr/include/asm/
-          cp -r arch/x86/include/uapi/asm/* ${INSTALL_PATH}/usr/include/asm/
+          echo "--- Installing Kernel Headers for Module Building ---"
+          # Installs headers needed to build external modules against this kernel
+          # Destination: ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}/include/
+          make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}
+          echo "Installed kernel headers to ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}"
 
           echo "--- Creating build and source Symlinks ---"
-          ln -sf ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX} ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
-          ln -sf ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX} ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/source
+          # These symlinks are crucial for tools like DKMS to find the kernel source/headers
+          ln -sf /usr/src/linux-headers-${KERNEL_VERSION} ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/build
+          ln -sf /usr/src/linux-headers-${KERNEL_VERSION} ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/source
+          echo "Created build and source symlinks in ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/"
 
-          echo "--- Verifying Module Installation ---"
-          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}
-          depmod -b ${INSTALL_PATH} -F System.map ${KERNEL_SUFFIX}
+          echo "--- Running depmod for the Staged Modules ---"
+          # Generate modules.dep and map files within the staging directory
+          depmod -b ${INSTALL_PATH} -F System.map ${KERNEL_VERSION}
+          echo "Generated module dependencies in ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/"
 
-          echo "--- Creating Installation Script ---"
+          # --- Verification Checks (Moved Here) ---
+          echo "--- Verifying Staged Files ---"
+          echo "Checking boot files:"
+          ls -l ${INSTALL_PATH}/boot/
+          echo "Checking module directory:"
+          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/
+          echo "Checking module dependency files:"
+          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/modules.*
+          echo "Checking header directory:"
+          ls -l ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}/
+          echo "Checking header symlinks:"
+          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/build
+          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/source
+          # --- End Verification Checks ---
+
+          echo "--- Creating Installation Script for Target VM ---"
+          # This script assumes the target VM is Debian/Ubuntu based (uses update-initramfs, update-grub)
+          # Adjustments might be needed for other distributions (e.g., use dracut)
           cat <<EOF > ${INSTALL_PATH}/install_kernel.sh
           #!/bin/bash
+          # Install custom Linux kernel (${KERNEL_VERSION}) on the target VM.
+          # Prerequisites: tar, root privileges, and distribution-specific tools
+          # (e.g., update-initramfs, update-grub for Debian/Ubuntu; dracut for Fedora/RHEL).
 
-          # Install custom Linux kernel (${KERNEL_SUFFIX})
+          set -e # Exit immediately if a command exits with a non-zero status.
 
-          set -e
+          KERNEL_VERSION="${KERNEL_VERSION}" # Use the exact version string
+          PACKAGE_NAME="linux-kernel-package-\${KERNEL_VERSION}.tar.gz"
 
-          KERNEL_VERSION=${KERNEL_SUFFIX}
+          echo "--- Installing Kernel \${KERNEL_VERSION} ---"
 
-          echo "Installing kernel \${KERNEL_VERSION}..."
+          if [ "\$(id -u)" -ne 0 ]; then
+            echo "ERROR: This script must be run as root."
+            exit 1
+          fi
 
-          # 1. Clean up old kernel files (optional, replace 6.1 with version to remove)
-          echo "Cleaning up old kernel files (if any)..."
-          rm -rf /boot/*6.1* /lib/modules/*6.1* /usr/src/linux-headers-*6.1* || true
+          if [ ! -f "\${PACKAGE_NAME}" ]; then
+              echo "ERROR: Kernel package '\${PACKAGE_NAME}' not found in current directory."
+              echo "Please place the tar.gz file here before running."
+              exit 1
+          fi
 
-          # 2. Extract tarball
-          echo "Extracting kernel package..."
-          tar -xzvf linux-kernel-package-\${KERNEL_VERSION}.tar.gz -C /
+          echo "1. Extracting kernel package to root filesystem..."
+          # Extracts boot/, lib/modules/, usr/src/ headers into the rootfs
+          tar -xzvf "\${PACKAGE_NAME}" -C /
 
-          # 3. Update module dependencies
-          echo "Updating module dependencies..."
-          depmod \${KERNEL_VERSION}
+          echo "2. Generating initramfs (using update-initramfs)..."
+          # This command is for Debian/Ubuntu. Replace if using a different distro (e.g., dracut).
+          # Check if update-initramfs exists
+          if command -v update-initramfs &> /dev/null; then
+              update-initramfs -c -k "\${KERNEL_VERSION}"
+          elif command -v dracut &> /dev/null; then
+              echo "Attempting initramfs generation with dracut..."
+              dracut --force "/boot/initramfs-\${KERNEL_VERSION}.img" "\${KERNEL_VERSION}"
+          else
+              echo "WARNING: Could not find update-initramfs or dracut."
+              echo "You may need to manually generate the initramfs for kernel \${KERNEL_VERSION}"
+              echo "Example (Debian/Ubuntu): update-initramfs -c -k \${KERNEL_VERSION}"
+              echo "Example (Fedora/RHEL): dracut /boot/initramfs-\${KERNEL_VERSION}.img \${KERNEL_VERSION}"
+          fi
 
-          # 4. Create build and source symlinks
-          echo "Creating build and source symlinks..."
-          ln -sf /usr/src/linux-headers-\${KERNEL_VERSION} /lib/modules/\${KERNEL_VERSION}/build
-          ln -sf /usr/src/linux-headers-\${KERNEL_VERSION} /lib/modules/\${KERNEL_VERSION}/source
+          echo "3. Updating bootloader (using update-grub)..."
+          # This command is for GRUB. Adjust if using a different bootloader (e.g., systemd-boot, extlinux).
+          # Check if update-grub exists
+          if command -v update-grub &> /dev/null; then
+              update-grub
+          elif command -v grub2-mkconfig &> /dev/null; then
+             echo "Attempting bootloader update with grub2-mkconfig..."
+             # Adjust output path if needed (e.g., for EFI systems /boot/efi/EFI/fedora/grub.cfg)
+             grub2-mkconfig -o /boot/grub2/grub.cfg
+          elif [ -f /boot/extlinux/extlinux.conf ]; then
+             echo "WARNING: Found extlinux.conf. update-grub not found."
+             echo "You may need to manually update /boot/extlinux/extlinux.conf for kernel \${KERNEL_VERSION}."
+          else
+             echo "WARNING: Could not find update-grub or grub2-mkconfig."
+             echo "You may need to manually update your bootloader configuration."
+          fi
 
-          # 5. Update bootloader
-          echo "Updating bootloader..."
-          update-grub
 
-          # 6. Verify installation
-          echo "Verifying installation..."
-          ls /boot | grep \${KERNEL_VERSION}
-          ls /lib/modules/\${KERNEL_VERSION}
-          ls /usr/src/linux-headers-\${KERNEL_VERSION}
-          ls /usr/include/linux
+          # 4. Verifying installation (basic checks)
+          echo "4. Verifying installation..."
+          echo "Checking /boot:"
+          ls -l /boot | grep "\${KERNEL_VERSION}"
+          echo "Checking /lib/modules:"
+          ls -l /lib/modules | grep "\${KERNEL_VERSION}"
+          echo "Checking /usr/src:"
+          ls -l /usr/src | grep "\${KERNEL_VERSION}"
 
-          echo "Kernel \${KERNEL_VERSION} installed successfully!"
-          echo "Reboot to use the new kernel: reboot"
+          echo ""
+          echo "Kernel \${KERNEL_VERSION} installation script finished."
+          echo "Review the output above for any warnings or errors."
+          echo "If everything looks correct, reboot your system to use the new kernel:"
+          echo "sudo reboot"
           EOF
 
           chmod +x ${INSTALL_PATH}/install_kernel.sh
+          echo "Created install_kernel.sh in ${INSTALL_PATH}/"
 
           echo "--- Creating Tarball ---"
-          tar -czvf ${GITHUB_WORKSPACE}/linux-kernel-package-${KERNEL_SUFFIX}.tar.gz -C ${INSTALL_PATH} .
+          # Go to the parent directory of _install to tar correctly
+          cd ${GITHUB_WORKSPACE}
+          tar -czvf linux-kernel-package-${KERNEL_VERSION}.tar.gz -C ${INSTALL_DIR_NAME} .
+          echo "Created tarball: linux-kernel-package-${KERNEL_VERSION}.tar.gz"
 
-      - name: Verify Kernel Package
-        working-directory: ./linux_source
-        run: |
-          echo "--- Verifying kheaders Support ---"
-          grep CONFIG_KHEADERS .config
-
-          echo "--- Verifying Headers Installation ---"
-          ls -l ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
-          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
-          ls -l ${INSTALL_PATH}/usr/include/linux
-          ls -l ${INSTALL_PATH}/usr/include/asm
 
       - name: Upload Kernel Package Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-kernel-package-${{ env.KERNEL_SUFFIX }}
-          path: linux-kernel-package-${{ env.KERNEL_SUFFIX }}.tar.gz
-          retention-days: 90
+          name: linux-kernel-package-${{ env.KERNEL_VERSION }} # Use KERNEL_VERSION from env
+          path: linux-kernel-package-${{ env.KERNEL_VERSION }}.tar.gz
+          retention-days: 90 # Keep artifacts for 90 days
