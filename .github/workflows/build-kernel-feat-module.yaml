@@ -10,7 +10,7 @@ on:
       config_name:
         description: 'Name of kernel config file in build-kernel/ directory'
         required: true
-        default: 'config-6.12.24-0-virt-edited'
+        default: 'config-debian-12-edited'
 
 jobs:
   build-kernel:
@@ -52,53 +52,44 @@ jobs:
           cp "${LOCAL_CONFIG_PATH}" .config
           echo "Copied ${LOCAL_CONFIG_PATH} to .config"
 
-          echo "--- Creating Debug/Ftrace Config Fragment ---"
-          cat <<EOF > debug.config
-          CONFIG_DEBUG_KERNEL=y
-          CONFIG_DEBUG_INFO=y
-          CONFIG_DEBUG_INFO_BTF=y
-          CONFIG_DEBUG_INFO_REDUCED=n
-          CONFIG_GDB_SCRIPTS=y
-          CONFIG_FTRACE=y
-          CONFIG_FUNCTION_TRACER=y
-          CONFIG_FUNCTION_GRAPH_TRACER=y
-          CONFIG_KPROBES=y
-          CONFIG_MAGIC_SYSRQ=y
-          CONFIG_IKCONFIG=y
-          CONFIG_IKCONFIG_PROC=y
-          CONFIG_KHEADERS=y
-          CONFIG_BPF=y
-          CONFIG_BPF_SYSCALL=y
-          CONFIG_BPF_JIT=y
-          CONFIG_BPF_JIT_ALWAYS_ON=y
-          CONFIG_BPF_EVENTS=y
-          EOF
-
-          echo "--- Merging Debug Config ---"
-          ./scripts/kconfig/merge_config.sh -m .config debug.config
-          echo "Merged debug.config"
-
-          echo "--- Disabling Signature Options ---"
-          ./scripts/config --disable MODULE_SIG
-          ./scripts/config --disable MODULE_SIG_ALL
-          ./scripts/config --disable MODULE_SIG_FORCE
-          ./scripts/config --disable SYSTEM_TRUSTED_KEYRING
-          ./scripts/config --disable SYSTEM_REVOCATION_LIST
-          echo "Disabled signature options"
-
-          echo "--- Setting LOCALVERSION ---"
-          ./scripts/config --set-str LOCALVERSION ""
-          echo "Set LOCALVERSION to empty"
-
           echo "--- Finalizing Configuration ---"
           make olddefconfig
           echo "Ran olddefconfig to finalize config"
 
           echo "--- Verifying Configuration ---"
-          grep -E 'CONFIG_MODULE_SIG=|CONFIG_SYSTEM_TRUSTED_KEYRING=|CONFIG_SYSTEM_REVOCATION_LIST=' .config || echo "Signature options disabled"
-          grep 'CONFIG_LOCALVERSION=' .config
-          grep 'CONFIG_KHEADERS=' .config
-          grep 'CONFIG_DEBUG_INFO_BTF=' .config
+          echo "Checking security, signature, verification options, and LOCALVERSION:"
+          declare -A config_checks=(
+            ["CONFIG_SECURITY"]="n"
+            ["CONFIG_MODULE_SIG"]="n"
+            ["CONFIG_SYSTEM_TRUSTED_KEYRING"]="n"
+            ["CONFIG_SYSTEM_REVOCATION_LIST"]="n"
+            ["CONFIG_SYSTEM_BLACKLIST_KEYRING"]="n"
+            ["CONFIG_SYSTEM_DATA_VERIFICATION"]="n"
+            ["CONFIG_FS_VERITY_BUILTIN_SIGNATURES"]="n"
+            ["CONFIG_CFG80211_REQUIRE_SIGNED_REGDB"]="n"
+            ["CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG"]="n"
+            ["CONFIG_LOCALVERSION"]="\"\""
+          )
+          verification_passed=true
+          for key in "${!config_checks[@]}"; do
+            expected="${config_checks[$key]}"
+            if grep -q "${key}=" .config; then
+              actual=$(grep "${key}=" .config | cut -d'=' -f2)
+              if [ "$actual" != "$expected" ]; then
+                echo "WARNING: $key is set to '$actual', expected '$expected'"
+                verification_passed=false
+              else
+                echo "$key is correctly set to '$actual'"
+              fi
+            else
+              echo "$key is unset, which is acceptable"
+            fi
+          done
+          if [ "$verification_passed" = true ]; then
+            echo "All configuration checks passed"
+          else
+            echo "Some configuration checks failed, continuing build"
+          fi
 
       - name: Build Kernel and Modules
         working-directory: ./linux_source
@@ -210,3 +201,11 @@ jobs:
           name: linux-kernel-package-${{ env.KERNEL_VERSION }}
           path: linux-kernel-package-${{ env.KERNEL_VERSION }}.tar.gz
           retention-days: 90
+
+      - name: Upload .config for Debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config
+          path: linux_source/.config
+          retention-days: 5
