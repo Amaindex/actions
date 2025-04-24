@@ -1,4 +1,4 @@
-name: Build Kernel for VM (Using Local Config + Debug/Ftrace)
+name: Build Kernel for VM with Local Config
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       branch:
         description: 'Branch to build (e.g., ax from amaindex/linux)'
         required: true
-        default: 'ax'
+        default: 'master'
       config_name:
         description: 'Name of kernel config file in build-kernel/ directory'
         required: true
@@ -109,6 +109,8 @@ jobs:
           mkdir -p ${INSTALL_PATH}/boot
           mkdir -p ${INSTALL_PATH}/lib/modules
           mkdir -p ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
+          mkdir -p ${INSTALL_PATH}/usr/include/linux
+          mkdir -p ${INSTALL_PATH}/usr/include/asm
 
           echo "--- Copying Kernel Files ---"
           cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_SUFFIX}
@@ -130,6 +132,11 @@ jobs:
           echo "--- Installing Kernel Headers ---"
           make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
 
+          echo "--- Installing User-Space Headers ---"
+          cp -r include/uapi/linux/* ${INSTALL_PATH}/usr/include/linux/
+          cp -r include/uapi/asm-generic/* ${INSTALL_PATH}/usr/include/asm/
+          cp -r arch/x86/include/uapi/asm/* ${INSTALL_PATH}/usr/include/asm/
+
           echo "--- Creating build and source Symlinks ---"
           ln -sf ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX} ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
           ln -sf ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX} ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/source
@@ -138,49 +145,66 @@ jobs:
           ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}
           depmod -b ${INSTALL_PATH} -F System.map ${KERNEL_SUFFIX}
 
-          echo "--- Creating Installation Instructions ---"
-          cat <<EOF > ${INSTALL_PATH}/README.md
-          # Kernel Installation Instructions
+          echo "--- Creating Installation Script ---"
+          cat <<EOF > ${INSTALL_PATH}/install_kernel.sh
+          #!/bin/bash
 
-          This package contains a custom Linux kernel (${KERNEL_SUFFIX}) with debugging and development support.
+          # Install custom Linux kernel (${KERNEL_SUFFIX})
 
-          ## Installation Steps
+          set -e
 
-          1. **Extract the tarball**:
-             \`\`\`bash
-             sudo tar -xzvf linux-kernel-package-${KERNEL_SUFFIX}.tar.gz -C /
-             \`\`\`
+          KERNEL_VERSION=${KERNEL_SUFFIX}
 
-          2. **Update module dependencies**:
-             \`\`\`bash
-             sudo depmod ${KERNEL_SUFFIX}
-             \`\`\`
+          echo "Installing kernel \${KERNEL_VERSION}..."
 
-          3. **Ensure headers are accessible**:
-             \`\`\`bash
-             sudo ln -sf /usr/src/linux-headers-${KERNEL_SUFFIX} /lib/modules/${KERNEL_SUFFIX}/build
-             sudo ln -sf /usr/src/linux-headers-${KERNEL_SUFFIX} /lib/modules/${KERNEL_SUFFIX}/source
-             \`\`\`
+          # 1. Clean up old kernel files (optional, replace 6.1 with version to remove)
+          echo "Cleaning up old kernel files (if any)..."
+          rm -rf /boot/*6.1* /lib/modules/*6.1* /usr/src/linux-headers-*6.1* || true
 
-          4. **Update bootloader (e.g., GRUB or extlinux)**:
-             \`\`\`bash
-             sudo update-grub
-             \`\`\`
+          # 2. Extract tarball
+          echo "Extracting kernel package..."
+          tar -xzvf linux-kernel-package-\${KERNEL_VERSION}.tar.gz -C /
 
-          5. **Reboot to the new kernel**:
-             \`\`\`bash
-             sudo reboot
-             \`\`\`
+          # 3. Update module dependencies
+          echo "Updating module dependencies..."
+          depmod \${KERNEL_VERSION}
 
-          ## Notes
-          - The kernel includes support for debugging (Ftrace, Kprobes, KGDB), BPF (for tools like bcc), and kheaders (/sys/kernel/kheaders.tar.xz).
-          - Ensure /sys/kernel/debug is mounted for debugging tools.
-          - For bcc, mount required directories as shown in your Docker command.
+          # 4. Create build and source symlinks
+          echo "Creating build and source symlinks..."
+          ln -sf /usr/src/linux-headers-\${KERNEL_VERSION} /lib/modules/\${KERNEL_VERSION}/build
+          ln -sf /usr/src/linux-headers-\${KERNEL_VERSION} /lib/modules/\${KERNEL_VERSION}/source
 
+          # 5. Update bootloader
+          echo "Updating bootloader..."
+          update-grub
+
+          # 6. Verify installation
+          echo "Verifying installation..."
+          ls /boot | grep \${KERNEL_VERSION}
+          ls /lib/modules/\${KERNEL_VERSION}
+          ls /usr/src/linux-headers-\${KERNEL_VERSION}
+          ls /usr/include/linux
+
+          echo "Kernel \${KERNEL_VERSION} installed successfully!"
+          echo "Reboot to use the new kernel: reboot"
           EOF
+
+          chmod +x ${INSTALL_PATH}/install_kernel.sh
 
           echo "--- Creating Tarball ---"
           tar -czvf ${GITHUB_WORKSPACE}/linux-kernel-package-${KERNEL_SUFFIX}.tar.gz -C ${INSTALL_PATH} .
+
+      - name: Verify Kernel Package
+        working-directory: ./linux_source
+        run: |
+          echo "--- Verifying kheaders Support ---"
+          grep CONFIG_KHEADERS .config
+
+          echo "--- Verifying Headers Installation ---"
+          ls -l ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_SUFFIX}
+          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_SUFFIX}/build
+          ls -l ${INSTALL_PATH}/usr/include/linux
+          ls -l ${INSTALL_PATH}/usr/include/asm
 
       - name: Upload Kernel Package Artifact
         uses: actions/upload-artifact@v4
