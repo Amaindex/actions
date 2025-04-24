@@ -45,51 +45,10 @@ jobs:
         run: |
           echo "--- Copying Local Config ---"
           LOCAL_CONFIG_PATH="../build-kernel/${{ github.event.inputs.config_name }}"
-          if [ ! -f "${LOCAL_CONFIG_PATH}" ]; then
-            echo "ERROR: Config file not found at ${LOCAL_CONFIG_PATH}"
-            exit 1
-          fi
           cp "${LOCAL_CONFIG_PATH}" .config
           echo "Copied ${LOCAL_CONFIG_PATH} to .config"
-
-          echo "--- Finalizing Configuration ---"
           make olddefconfig
           echo "Ran olddefconfig to finalize config"
-
-          echo "--- Verifying Configuration ---"
-          echo "Checking security, signature, verification options, and LOCALVERSION:"
-          declare -A config_checks=(
-            ["CONFIG_SECURITY"]="n"
-            ["CONFIG_MODULE_SIG"]="n"
-            ["CONFIG_SYSTEM_TRUSTED_KEYRING"]="n"
-            ["CONFIG_SYSTEM_REVOCATION_LIST"]="n"
-            ["CONFIG_SYSTEM_BLACKLIST_KEYRING"]="n"
-            ["CONFIG_SYSTEM_DATA_VERIFICATION"]="n"
-            ["CONFIG_FS_VERITY_BUILTIN_SIGNATURES"]="n"
-            ["CONFIG_CFG80211_REQUIRE_SIGNED_REGDB"]="n"
-            ["CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG"]="n"
-            ["CONFIG_LOCALVERSION"]="\"\""
-          )
-          verification_passed=true
-          for key in "${!config_checks[@]}"; do
-            expected="${config_checks[$key]}"
-            if grep -q "${key}=" .config; then
-              actual=$(grep "${key}=" .config | cut -d'=' -f2)
-              if [ "$actual" != "$expected" ]; then
-                echo "WARNING: $key is set to '$actual', expected '$expected'"
-                verification_passed=false
-              else
-                echo "$key is correctly set to '$actual'"
-              fi
-            else
-              echo "$key is unset, which is acceptable"
-            fi
-          done
-          if [ "$verification_passed" = true ]; then
-            echo "All configuration checks passed"
-          else
-            echo "Some configuration checks failed, continuing build"
-          fi
 
       - name: Build Kernel and Modules
         working-directory: ./linux_source
@@ -99,15 +58,11 @@ jobs:
           echo "--- Building Modules ---"
           make -j$(nproc) modules
 
-      - name: Package Kernel and Modules
+      - name: Package Kernel, Modules, and Headers
         working-directory: ./linux_source
         run: |
           echo "--- Determining Kernel Version ---"
           KERNEL_VERSION=$(make -s kernelrelease)
-          if [ -z "${KERNEL_VERSION}" ]; then
-            echo "ERROR: Failed to determine kernel version"
-            exit 1
-          fi
           echo "Kernel Version: ${KERNEL_VERSION}"
           echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
 
@@ -116,6 +71,7 @@ jobs:
           mkdir -p ${INSTALL_PATH}/boot
           mkdir -p ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}
           mkdir -p ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}
+          mkdir -p ${INSTALL_PATH}/usr/include
 
           echo "--- Copying Boot Files ---"
           cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_VERSION}
@@ -125,8 +81,15 @@ jobs:
           echo "--- Installing Modules ---"
           make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
 
-          echo "--- Installing Headers ---"
-          make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}
+          echo "--- Installing Full Kernel Headers ---"
+          rsync -a --exclude='*.o' --exclude='*.ko' --exclude='*.a' --exclude='*.mod' \
+                --include='*/' --include='Makefile*' --include='Module.symvers' \
+                --include='.config' --include='include/**' --include='arch/x86/**' \
+                --include='scripts/**' --include='tools/**' --exclude='*' \
+                . ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}/
+
+          echo "--- Installing User-Space Headers ---"
+          make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr
 
           echo "--- Creating Symlinks ---"
           ln -sf /usr/src/linux-headers-${KERNEL_VERSION} ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/build
@@ -134,62 +97,6 @@ jobs:
 
           echo "--- Running depmod ---"
           depmod -b ${INSTALL_PATH} -F System.map ${KERNEL_VERSION}
-
-          echo "--- Creating Installation Script ---"
-          cat <<EOF > ${INSTALL_PATH}/install_kernel.sh
-          #!/bin/bash
-          set -e
-          KERNEL_VERSION="${KERNEL_VERSION}"
-          PACKAGE_NAME="linux-kernel-package-\${KERNEL_VERSION}.tar.gz"
-
-          echo "--- Installing Kernel \${KERNEL_VERSION} ---"
-          if [ "\$(id -u)" -ne 0 ]; then
-            echo "ERROR: Must run as root"
-            exit 1
-          fi
-
-          if [ ! -f "\${PACKAGE_NAME}" ]; then
-            echo "ERROR: Package \${PACKAGE_NAME} not found"
-            exit 1
-          fi
-
-          echo "Extracting package..."
-          tar -xzvf "\${PACKAGE_NAME}" -C /
-
-          echo "Generating initramfs..."
-          if command -v update-initramfs &> /dev/null; then
-            update-initramfs -c -k "\${KERNEL_VERSION}"
-          elif command -v dracut &> /dev/null; then
-            dracut --force "/boot/initramfs-\${KERNEL_VERSION}.img" "\${KERNEL_VERSION}"
-          else
-            echo "WARNING: No initramfs tool found. Manual generation required."
-          fi
-
-          echo "Updating bootloader..."
-          if command -v update-grub &> /dev/null; then
-            update-grub
-          elif command -v grub2-mkconfig &> /dev/null; then
-            grub2-mkconfig -o /boot/grub2/grub.cfg
-          else
-            echo "WARNING: No bootloader update tool found. Manual update required."
-          fi
-
-          echo "Verifying installation..."
-          ls -l /boot | grep "\${KERNEL_VERSION}" || echo "No boot files found"
-          ls -l /lib/modules | grep "\${KERNEL_VERSION}" || echo "No modules found"
-          ls -l /usr/src | grep "\${KERNEL_VERSION}" || echo "No headers found"
-
-          echo "Kernel \${KERNEL_VERSION} installed. Reboot to use: sudo reboot"
-          EOF
-          chmod +x ${INSTALL_PATH}/install_kernel.sh
-
-          echo "--- Verifying Staged Files ---"
-          ls -l ${INSTALL_PATH}/boot/
-          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/
-          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/modules.*
-          ls -l ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}/
-          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/build
-          ls -l ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/source
 
           echo "--- Creating Tarball ---"
           cd ${GITHUB_WORKSPACE}
@@ -202,10 +109,9 @@ jobs:
           path: linux-kernel-package-${{ env.KERNEL_VERSION }}.tar.gz
           retention-days: 90
 
-      - name: Upload .config for Debugging
-        if: failure()
+      - name: Upload Installation Guide
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-config
-          path: linux_source/.config
-          retention-days: 5
+          name: installation-guide
+          path: _install/INSTALL.md
+          retention-days: 90
