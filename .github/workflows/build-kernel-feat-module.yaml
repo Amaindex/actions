@@ -108,10 +108,3 @@ jobs:
           name: linux-kernel-package-${{ env.KERNEL_VERSION }}
           path: linux-kernel-package-${{ env.KERNEL_VERSION }}.tar.gz
           retention-days: 90
-
-      - name: Upload Installation Guide
-        uses: actions/upload-artifact@v4
-        with:
-          name: installation-guide
-          path: _install/INSTALL.md
-          retention-days: 90
