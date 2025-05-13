@@ -3,8 +3,12 @@ name: Build Kernel for VM with Local Config
 on:
   workflow_dispatch:
     inputs:
+      repo:
+        description: 'Repo to build (e.g., amaindex/linux)'
+        required: true
+        default: 'amaindex/linux'
       branch:
-        description: 'Branch to build (e.g., ax from amaindex/linux)'
+        description: 'Branch to build (e.g., master from amaindex/linux)'
         required: true
         default: 'master'
       config_name:
@@ -25,11 +29,11 @@ jobs:
     steps:
       - name: Checkout Project Repository
         uses: actions/checkout@v4
-
+  
       - name: Checkout Linux Repository
         uses: actions/checkout@v4
         with:
-          repository: amaindex/linux
+          repository: ${{ github.event.inputs.repo }}
           ref: ${{ github.event.inputs.branch }}
           path: linux_source
 
