@@ -1,0 +1,115 @@
+# .github/workflows/build-kernel-builtin-debug.yaml
+
+name: Build Built-in Kernel with Debug Info
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Repo to build (e.g., torvalds/linux)'
+        required: true
+        default: 'torvalds/linux'
+      branch:
+        description: 'Branch to build (e.g., master)'
+        required: true
+        default: 'master'
+      config_name:
+        description: 'Name of kernel config file in build-kernel/ directory'
+        required: true
+        default: 'config-debian-12-edited'
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        arch: [amd64]
+
+    steps:
+      - name: Checkout Project Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Linux Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.repo }}
+          ref: ${{ github.event.inputs.branch }}
+          path: linux_source
+          # Fetch all history for 'make kernelrelease' to work correctly
+          fetch-depth: 0
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
+                                  gcc make libncurses-dev kmod cpio dwarves pahole rsync \
+                                  libbpf-dev
+
+      - name: Configure Kernel (Built-in)
+        working-directory: ./linux_source
+        run: |
+          echo "--- Copying Local Config ---"
+          LOCAL_CONFIG_PATH="../build-kernel/${{ github.event.inputs.config_name }}"
+          cp "${LOCAL_CONFIG_PATH}" .config
+          echo "Copied ${LOCAL_CONFIG_PATH} to .config"
+
+          echo "--- Verifying Debug Info Config ---"
+          if ! grep -q "CONFIG_DEBUG_INFO=y" .config; then
+            echo "::error::CONFIG_DEBUG_INFO=y is not set in your config file!"
+            echo "Please enable 'Compile the kernel with debug info' in Kernel Hacking."
+            exit 1
+          fi
+          echo "CONFIG_DEBUG_INFO=y is correctly set."
+
+          echo "--- Forcing Built-in Configuration ---"
+          # Disable module support to ensure all features are built-in
+          scripts/config --disable MODULES
+          # Convert all =m to =y to ensure everything is built-in
+          sed -i 's/=m/=y/g' .config
+
+          make olddefconfig
+          echo "Ran olddefconfig to finalize config"
+
+      - name: Build Kernel (vmlinux and bzImage)
+        working-directory: ./linux_source
+        run: |
+          echo "--- Building Kernel (vmlinux, bzImage) ---"
+          # Using 'all' target ensures both vmlinux and bzImage are built
+          make -j$(nproc) all
+
+      - name: Package Kernel for Deployment
+        working-directory: ./linux_source
+        run: |
+          echo "--- Determining Kernel Version ---"
+          KERNEL_VERSION=$(make -s kernelrelease)
+          echo "Kernel Version: ${KERNEL_VERSION}"
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+
+          echo "--- Setting Up Installation Directory ---"
+          INSTALL_PATH="${GITHUB_WORKSPACE}/_install"
+          mkdir -p ${INSTALL_PATH}/boot
+
+          echo "--- Copying Boot Files (excluding vmlinux) ---"
+          cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_VERSION}
+          cp System.map ${INSTALL_PATH}/boot/System.map-${KERNEL_VERSION}
+          cp .config ${INSTALL_PATH}/boot/config-${KERNEL_VERSION}
+
+          echo "--- Creating Tarball for Deployment ---"
+          cd ${GITHUB_WORKSPACE}
+          tar -czvf linux-kernel-package-builtin-${KERNEL_VERSION}.tar.gz -C _install .
+
+      - name: Upload Kernel Package for Deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-kernel-package-builtin-${{ env.KERNEL_VERSION }}
+          path: linux-kernel-package-builtin-${{ env.KERNEL_VERSION }}.tar.gz
+          retention-days: 90
+
+      # --- Upload the separate vmlinux for debugging ---
+      - name: Upload vmlinux with Debug Symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux-debug-builtin-${{ env.KERNEL_VERSION }}
+          path: ./linux_source/vmlinux
+          retention-days: 90

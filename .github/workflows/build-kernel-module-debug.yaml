@@ -1,0 +1,139 @@
+# .github/workflows/build-kernel.yml
+
+name: Build Kernel for VM with Local Config
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Repo to build (e.g., torvalds/linux)'
+        required: true
+        default: 'torvalds/linux'
+      branch:
+        description: 'Branch to build (e.g., master)'
+        required: true
+        default: 'master'
+      config_name:
+        description: 'Name of kernel config file in build-kernel/ directory'
+        required: true
+        default: 'config-debian-12-edited'
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    env:
+      INSTALL_DIR_NAME: _install
+
+    strategy:
+      matrix:
+        arch: [amd64]
+
+    steps:
+      - name: Checkout Project Repository
+        uses: actions/checkout@v4
+  
+      - name: Checkout Linux Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.repo }}
+          ref: ${{ github.event.inputs.branch }}
+          path: linux_source
+          # Fetch all history for 'make kernelrelease' to work correctly
+          fetch-depth: 0
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
+                                  gcc make libncurses-dev kmod cpio dwarves pahole rsync \
+                                  libbpf-dev
+
+      - name: Configure Kernel
+        working-directory: ./linux_source
+        run: |
+          echo "--- Copying Local Config ---"
+          LOCAL_CONFIG_PATH="../build-kernel/${{ github.event.inputs.config_name }}"
+          cp "${LOCAL_CONFIG_PATH}" .config
+          echo "Copied ${LOCAL_CONFIG_PATH} to .config"
+
+          echo "--- Verifying Debug Info Config ---"
+          # 关键检查：确保配置文件中启用了调试信息，否则工作流将失败
+          if ! grep -q "CONFIG_DEBUG_INFO=y" .config; then
+            echo "::error::CONFIG_DEBUG_INFO=y is not set in your config file!"
+            echo "Please enable 'Compile the kernel with debug info' in Kernel Hacking."
+            exit 1
+          fi
+          echo "CONFIG_DEBUG_INFO=y is correctly set."
+
+          make olddefconfig
+          echo "Ran olddefconfig to finalize config"
+
+      - name: Build Kernel, vmlinux and Modules
+        working-directory: ./linux_source
+        run: |
+          echo "--- Building Kernel (vmlinux, bzImage) and Modules ---"
+          # 使用 'all' 目标来确保 vmlinux 和 bzImage 都被构建
+          make -j$(nproc) all
+          echo "--- Building Modules ---"
+          make -j$(nproc) modules
+
+      - name: Package Kernel, Modules, and Headers for Deployment
+        working-directory: ./linux_source
+        run: |
+          echo "--- Determining Kernel Version ---"
+          KERNEL_VERSION=$(make -s kernelrelease)
+          echo "Kernel Version: ${KERNEL_VERSION}"
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
+
+          echo "--- Setting Up Installation Directory ---"
+          INSTALL_PATH="${GITHUB_WORKSPACE}/${INSTALL_DIR_NAME}"
+          mkdir -p ${INSTALL_PATH}/boot
+          mkdir -p ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}
+          mkdir -p ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}
+          mkdir -p ${INSTALL_PATH}/usr/include
+
+          echo "--- Copying Boot Files (excluding vmlinux) ---"
+          # 这里只复制用于启动的 bzImage (vmlinuz)
+          cp arch/x86/boot/bzImage ${INSTALL_PATH}/boot/vmlinuz-${KERNEL_VERSION}
+          cp System.map ${INSTALL_PATH}/boot/System.map-${KERNEL_VERSION}
+          cp .config ${INSTALL_PATH}/boot/config-${KERNEL_VERSION}
+
+          echo "--- Installing Modules ---"
+          make modules_install INSTALL_MOD_PATH=${INSTALL_PATH}
+
+          echo "--- Installing Full Kernel Headers ---"
+          rsync -a --exclude='*.o' --exclude='*.ko' --exclude='*.a' --exclude='*.mod' \
+                --include='*/' --include='Makefile*' --include='Module.symvers' \
+                --include='.config' --include='include/**' --include='arch/x86/**' \
+                --include='scripts/**' --include='tools/**' --exclude='*' \
+                . ${INSTALL_PATH}/usr/src/linux-headers-${KERNEL_VERSION}/
+
+          echo "--- Installing User-Space Headers ---"
+          make headers_install INSTALL_HDR_PATH=${INSTALL_PATH}/usr
+
+          echo "--- Creating Symlinks ---"
+          ln -sf /usr/src/linux-headers-${KERNEL_VERSION} ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/build
+          ln -sf /usr/src/linux-headers-${KERNEL_VERSION} ${INSTALL_PATH}/lib/modules/${KERNEL_VERSION}/source
+
+          echo "--- Running depmod ---"
+          depmod -b ${INSTALL_PATH} -F System.map ${KERNEL_VERSION}
+
+          echo "--- Creating Tarball for Deployment ---"
+          cd ${GITHUB_WORKSPACE}
+          tar -czvf linux-kernel-package-${KERNEL_VERSION}.tar.gz -C ${INSTALL_DIR_NAME} .
+
+      - name: Upload Kernel Package for Deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-kernel-package-${{ env.KERNEL_VERSION }}
+          path: linux-kernel-package-${{ env.KERNEL_VERSION }}.tar.gz
+          retention-days: 90
+
+      # --- 新增步骤：单独上传用于调试的 vmlinux 文件 ---
+      - name: Upload vmlinux with Debug Symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux-debug-${{ env.KERNEL_VERSION }}
+          # vmlinux 文件位于 linux_source 的根目录
+          path: ./linux_source/vmlinux
+          retention-days: 90
