@@ -3,14 +3,14 @@ name: Build Minimal Built-in Kernel
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: 'Branch to build (e.g., ax)'
+      repo:
+        description: 'Repo to build (e.g., torvalds/linux)'
         required: true
-        default: 'ax'
-      build_number:
-        description: 'Build number (e.g., 147)'
-        required: false
-        default: ''
+        default: 'torvalds/linux'
+      branch:
+        description: 'Branch to build (e.g., master)'
+        required: true
+        default: 'master'
 
 jobs:
   build-kernel:
@@ -20,11 +20,12 @@ jobs:
         arch: [amd64, arm64]
 
     steps:
-      - name: Checkout linux repository
+      - name: Checkout Linux Repository
         uses: actions/checkout@v4
         with:
-          repository: amaindex/linux
+          repository: ${{ github.event.inputs.repo }}
           ref: ${{ github.event.inputs.branch }}
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
@@ -58,38 +59,33 @@ jobs:
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
           fi
 
-      - name: Package kernel
+      - name: Package Kernel
         run: |
-          mkdir -p kernel-package
-          # Extract kernel version from Makefile
-          KERNEL_VERSION=$(make kernelversion)
-          # Construct version string (remove any extra suffix if needed)
-          VERSION=$(echo $KERNEL_VERSION | sed 's/-[a-zA-Z0-9]*$//')
-          # Define architecture suffix
-          ARCH_SUFFIX=${{ matrix.arch }}
-          # Define output filename
-          if [ -n "${{ github.event.inputs.build_number }}" ]; then
-            KERNEL_NAME="vmlinuz-${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
-            SUFFIX="${VERSION}-${{ github.event.inputs.build_number }}-${ARCH_SUFFIX}"
-          else
-            KERNEL_NAME="vmlinuz-${VERSION}-${ARCH_SUFFIX}"
-            SUFFIX="${VERSION}-${ARCH_SUFFIX}"
-          fi
-          
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            cp arch/x86/boot/bzImage kernel-package/${KERNEL_NAME}
-          elif [ "${{ matrix.arch }}" = "arm64" ]; then
-            cp arch/arm64/boot/Image kernel-package/${KERNEL_NAME}
-          fi
-          cp System.map kernel-package/System.map-${SUFFIX}
-          cp .config kernel-package/config-${SUFFIX}
-          tar -czvf linux-kernel-${{ matrix.arch }}.tar.gz -C kernel-package .
-          # Set KERNEL_VERSION as environment variable
-          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
+          echo "--- Determining Kernel Version ---"
+          KERNEL_VERSION=$(make -s kernelrelease)
+          echo "Kernel Version: ${KERNEL_VERSION}"
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> $GITHUB_ENV
 
-      - name: Upload kernel artifact
+          echo "--- Setting Up Installation Directory ---"
+          INSTALL_PATH="${GITHUB_WORKSPACE}/_install"
+          mkdir -p "${INSTALL_PATH}/boot"
+
+          echo "--- Copying Boot Files ---"
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            cp arch/x86/boot/bzImage "${INSTALL_PATH}/boot/vmlinuz-${KERNEL_VERSION}"
+          elif [ "${{ matrix.arch }}" = "arm64" ]; then
+            cp arch/arm64/boot/Image "${INSTALL_PATH}/boot/vmlinuz-${KERNEL_VERSION}"
+          fi
+          cp "System.map" "${INSTALL_PATH}/boot/System.map-${KERNEL_VERSION}"
+          cp ".config" "${INSTALL_PATH}/boot/config-${KERNEL_VERSION}"
+
+          echo "--- Creating Tarball for Deployment ---"
+          cd "${GITHUB_WORKSPACE}"
+          tar -czvf "linux-kernel-package-builtin-${{ matrix.arch }}-${KERNEL_VERSION}.tar.gz" -C _install .
+
+      - name: Upload Kernel Package
         uses: actions/upload-artifact@v4
         with:
-          name: linux-kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}
-          path: linux-kernel-${{ matrix.arch }}.tar.gz 
+          name: linux-kernel-package-builtin-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}
+          path: "linux-kernel-package-builtin-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}.tar.gz"
           retention-days: 90

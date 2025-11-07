@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       repo:
-        description: 'Repo to build (e.g., amaindex/linux)'
+        description: 'Repo to build (e.g., torvalds/linux)'
         required: true
-        default: 'amaindex/linux'
+        default: 'torvalds/linux'
       branch:
-        description: 'Branch to build (e.g., master from amaindex/linux)'
+        description: 'Branch to build (e.g., master)'
         required: true
         default: 'master'
       config_name:
