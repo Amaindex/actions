@@ -1,4 +1,4 @@
-name: Build Kernel with Minimal Features
+name: Build Minimal Built-in Kernel
 
 on:
   workflow_dispatch:

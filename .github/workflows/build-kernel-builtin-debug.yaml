@@ -1,6 +1,6 @@
 # .github/workflows/build-kernel-builtin-debug.yaml
 
-name: Build Built-in Kernel with Debug Info
+name: Build Minimal Built-in Kernel (Debug)
 
 on:
   workflow_dispatch:

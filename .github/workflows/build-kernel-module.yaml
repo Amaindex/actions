@@ -1,4 +1,4 @@
-name: Build Kernel for VM with Local Config
+name: Build Modular Kernel with Local Config
 
 on:
   workflow_dispatch:

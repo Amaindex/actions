@@ -1,6 +1,6 @@
 # .github/workflows/build-kernel.yml
 
-name: Build Kernel for VM with Local Config
+name: Build Modular Kernel with Local Config (Debug)
 
 on:
   workflow_dispatch:
