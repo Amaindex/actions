@@ -13,10 +13,6 @@ on:
         description: 'Branch to build (e.g., master)'
         required: true
         default: 'master'
-      config_name:
-        description: 'Name of kernel config file in build-kernel/ directory'
-        required: true
-        default: 'config-debian-12-edited'
 
 jobs:
   build-kernel:
@@ -49,27 +45,23 @@ jobs:
       - name: Configure Kernel (Built-in)
         working-directory: ./linux_source
         run: |
-          echo "--- Copying Local Config ---"
-          LOCAL_CONFIG_PATH="../build-kernel/${{ github.event.inputs.config_name }}"
-          cp "${LOCAL_CONFIG_PATH}" .config
-          echo "Copied ${LOCAL_CONFIG_PATH} to .config"
+          echo "--- Generating Default Config ---"
+          make defconfig
 
-          echo "--- Verifying Debug Info Config ---"
-          if ! grep -q "CONFIG_DEBUG_INFO=y" .config; then
-            echo "::error::CONFIG_DEBUG_INFO=y is not set in your config file!"
-            echo "Please enable 'Compile the kernel with debug info' in Kernel Hacking."
-            exit 1
-          fi
-          echo "CONFIG_DEBUG_INFO=y is correctly set."
+          echo "--- Enabling Debug Options ---"
+          # Enable essential debug options for a better debugging experience
+          scripts/config --enable DEBUG_INFO
+          scripts/config --enable FRAME_POINTER
+          scripts/config --enable GDB_SCRIPTS
 
           echo "--- Forcing Built-in Configuration ---"
           # Disable module support to ensure all features are built-in
           scripts/config --disable MODULES
-          # Convert all =m to =y to ensure everything is built-in
+          # Convert all remaining module definitions (=m) to built-in (=y)
           sed -i 's/=m/=y/g' .config
 
+          echo "--- Finalizing Config ---"
           make olddefconfig
-          echo "Ran olddefconfig to finalize config"
 
       - name: Build Kernel (vmlinux and bzImage)
         working-directory: ./linux_source
